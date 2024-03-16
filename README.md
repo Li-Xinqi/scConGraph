@@ -2,7 +2,7 @@
 scConGraph is a scalable bi-layer graph model that efficiently **integrates cross-time context information**, enabling the comprehensive analysis of **tumor cell dynamic responses** from **paired perturbed or time-seiries single-cell transcriptomics**.
 
 <p align="center">
-  <img width="800"  src="https://github.com/Li-Xinqi/scConGraph/assets/53567070/410b5b7f-b4e7-4b63-906f-049799ef22f1">
+  <img width="800"  src="https://github.com/Li-Xinqi/scConGraph/assets/53567070/6680bce3-046f-4056-8477-93630bd4196a">
 </p>
 
 
