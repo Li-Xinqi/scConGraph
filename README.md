@@ -17,4 +17,4 @@ CINEMA-OT requires `python` version 3.7+.  Install directly from pip with:
 The LINE toolkit for graph embedding should be downloaded and installed from https://github.com/tangjianpku/LINE.git before using scConGraph. 
 
 ## Tutorial
-The vignette of scConGraph can be found in the project [wiki] (https://github.com/Li-Xinqi/scConGraph/wiki/scConGraph).
+The vignette of `scConGraph` can be found in the project [wiki](https://github.com/Li-Xinqi/scConGraph/wiki/scConGraph).
