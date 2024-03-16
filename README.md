@@ -14,7 +14,7 @@ CINEMA-OT requires `python` version 3.7+.  Install directly from pip with:
 
     pip install scConGraph
     
-The GSL package for Linux should be be downloaded and installed from http://www.gnu.org/software/gsl/.
+The LINE toolkit for graph embedding should be downloaded and installed from https://github.com/tangjianpku/LINE.git. 
 
 ## Tutorial
 For detailed usage, follow our step-by-step tutorial here:
