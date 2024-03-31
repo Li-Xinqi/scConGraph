@@ -23,20 +23,98 @@ from matplotlib.colors import LinearSegmentedColormap, rgb2hex
 from matplotlib.patches import Rectangle
 import subprocess
 import os
+import scanpy.external as sce
 
-def createScConGraphObj(sc_obj_comb, run_label, key, pre_name, pos_name, pre_colors=None, pos_colors=None,
-                        cls_prefixes=['C', 'T']):
-    data_ctrl, data_treat = splitScObjects(sc_obj_comb, sam_key=key, sam_values=[pre_name, pos_name])
-    scg = scConGraph(sc_obj_comb, data_ctrl, data_treat, key, pre_name, pos_name, run_label,pre_colors, pos_colors,
-                     cls_prefixes)
+def createScConGraphObj(sc_obj_comb, key, ctrl_name, treat_name, ctrl_colors=None, treat_colors=None,
+                    cls_prefixes=['Ctrl', 'Treat'],  runLabel = "Sample", resultPath = ""):
+                    
+    '''
+    Creat a scStateDynamics object based on the scRNA-seq data under control and treated conditions, and add the meta-information into it.
+
+    Parameters
+    ----------
+    sc_obj_comb: 'AnnData'
+        A scanpy object including the scRNA-seq data of both control and treated conditions.
+    key: 'str'
+        The name of the column recording the sample source (condition information) in sc_obj_comb.
+    ctrl_name: 'str'
+        The name of the control data.
+    treat_name: 'str'
+        The name of the treated data.
+    ctrl_colors:'list'
+        A list of colors to map the control clusters.
+    treat_colors:'list'
+        A list of colors to map the treated clusters.
+    cls_prefixes:'list'
+        A list with length 2, containing the prefixes of the cluster labels under control and treated clusters. The default is 'Ctrl' and 'Treat'.
+    resultPath: 'path-like str'
+        A path to save the analysis results. The default is to save at current directory.
+    Returns
+    -------
+    An initialized scConGraph object. 
+    '''
+    data_ctrl, data_treat = splitScObjects(sc_obj_comb, sam_key=key, sam_values=[ctrl_name, treat_name])
+    scg = scConGraph(sc_obj_comb, data_ctrl, data_treat, key, ctrl_name, treat_name,  ctrl_colors, treat_colors,
+                 cls_prefixes, runLabel, resultPath)
     return (scg)
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
 
+def runScanpyProcess(scobj, n_top_genes = 2000, regress_out_variables = ['nCount_RNA', 'percent_mito', 'percent_ribo'], 
+                     n_pcs = 40, harmony = False, condition = 'conditions' ):
+    
+    sc.pp.highly_variable_genes(scobj, n_top_genes = n_top_genes)
+    #scobj.raw = scobj.copy()
+    #scobj = scobj[:, scobj.var.highly_variable]
+    sc.pp.regress_out(scobj, regress_out_variables)
+    sc.pp.scale(scobj, max_value=10)
+
+    sc.tl.pca(scobj, svd_solver='arpack')
+    if harmony:
+        sce.pp.harmony_integrate(scobj,  condition)
+        scobj.obsm['X_pca'] = scobj.obsm['X_pca_harmony']
+        
+    sc.pp.neighbors(scobj, n_neighbors=10, n_pcs=n_pcs)
+    sc.tl.umap(scobj)
+    return (scobj)
+
+
+def runLINE(path, edges, output, order=1, size=100, negative=5, samples=500):
+    LINE = path.strip()  #
+    cmd = [
+        LINE,
+        '-train', edges,
+        '-output', output,
+        '-binary', '0',
+        '-size', str(size),
+        '-order', str(order),
+        '-negative', str(negative),
+        '-samples', str(samples),
+        '-threads', '20'
+    ]
+    print('Command line - Run LINE:', ' '.join(cmd))
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    last_print_time = time.time()
+    while True:
+        line = process.stdout.readline()
+        if not line and process.poll() is not None:
+            break  
+        
+        current_time = time.time()
+        if current_time - last_print_time >= 10:
+            print(line.strip())
+            last_print_time = current_time
+    process.wait()  
+    
+    
+
+    
+    
 def splitScObjects(scobj, sam_key, sam_values):
     data_split = [scobj[scobj.obs[sam_key] == v,:] for v in sam_values]
     return(data_split)
+
+
+
 
 
 def getSimilarity(PC_data1, PC_data2, k, alpha):
@@ -62,22 +140,9 @@ def getSimilarity(PC_data1, PC_data2, k, alpha):
     return (diff_prob)
 
 
-def runLINE(path, edges, output, order=1, size=128, negative=5, samples=500):
-    LINE = path
-    cmd = [
-        LINE,
-        '-train', edges,
-        '-output', output,
-        '-binary', '0',
-        '-size', str(size),
-        '-order', str(order),
-        '-negative', str(negative),
-        '-samples', str(samples),
-        '-threads', '20'
-    ]
-    print('Command line - Run LINE: %s' % ' '.join(cmd))
 
-    subprocess.run(cmd)
+
+
 
 def norm_embedding(embed_1st = None, embed_2nd_1 = None, embed_2nd_2 = None, mode = 0, weight = [0.5, 0.5]):
     if mode == 0:
@@ -103,7 +168,9 @@ def norm_embedding(embed_1st = None, embed_2nd_1 = None, embed_2nd_2 = None, mod
         embed_norm = normalize(embed_2nd_1, norm='l2')
     return embed_norm
 
-def runLineClustering(obj, embed, key = 'LINE', resolution = 0.5):
+
+
+def runLINEClustering(obj, embed, key = 'SCG', resolution = 0.5):
     obj.obsm[key] = embed
     sc.pp.neighbors(obj, use_rep = key)
     sc.tl.umap(obj)
@@ -111,19 +178,20 @@ def runLineClustering(obj, embed, key = 'LINE', resolution = 0.5):
     return obj
 
 
-def cls2cls_prob(data_pre, data_pos, weight_df,
-                 thre_cell=0.05, thre_cls=0.05):
+
+# Cluster-Cluster transition probability matrix
+def cls2cls_prob(data_ctrl, data_treat, weight_df, thre_cell=0.05, thre_cls=0.05):
     # probability of cell to cell
-    n_clus = np.array([len(data_pre.obs["LINE_cluster"].unique()), len(data_pos.obs["LINE_cluster"].unique())])
-    n_cells = np.array([data_pre.obs.shape[0], data_pos.obs.shape[0]])
+    n_clus = np.array([len(data_ctrl.obs["SCG_cluster"].unique()), len(data_treat.obs["SCG_cluster"].unique())])
+    n_cells = np.array([data_ctrl.obs.shape[0], data_treat.obs.shape[0]])
     cell2cell = normalize(np.array(weight_df), norm='l1')
 
     # probability of cell to cluster
-    cell_cls_pre = data_pre.obs['LINE_cluster']
-    cell_cls_pos = data_pos.obs['LINE_cluster']
-    cls_cellnum_pos = [np.sum(cell_cls_pos == str(j)) for j in range(n_clus[1])]
+    cell_cls_ctrl = data_ctrl.obs['SCG_cluster'] 
+    cell_cls_treat = data_treat.obs['SCG_cluster']
+    cls_cellnum_treat = [np.sum(cell_cls_treat == str(j)) for j in range(n_clus[1])]
 
-    cell2cls = [np.sum(cell2cell[:, np.where(cell_cls_pos == str(j))[0]], axis=1) / cls_cellnum_pos[j] for j in
+    cell2cls = [np.sum(cell2cell[:, np.where(cell_cls_treat == str(j))[0]], axis=1) / cls_cellnum_treat[j] for j in
                 range(n_clus[1])]
     cell2cls = np.transpose(np.array(cell2cls))
     cell2cls = normalize(np.array(cell2cls), norm='l1')
@@ -131,81 +199,102 @@ def cls2cls_prob(data_pre, data_pos, weight_df,
     cell2cls = normalize(np.array(cell2cls), norm='l1')
 
     # probability of cluster to cluster
-    cls2cls = [np.sum(cell2cls[np.where(cell_cls_pre == str(i))[0], :], axis=0) for i in range(n_clus[0])]
+    cls2cls = [np.sum(cell2cls[np.where(cell_cls_ctrl == str(i))[0], :], axis=0) for i in range(n_clus[0])]
     cls2cls = normalize(np.array(cls2cls), norm='l1')
-
     cls2cls[cls2cls < thre_cls] = 0
     cls2cls = normalize(cls2cls, norm='l1')
-    return (cls2cls)
+    return cls2cls
 
 
-def rapid_small(align_pre, align_pos):
-    n_clus = align_pre.shape
+def rapid_QC(transition_TPM, origin_TPM):
+    n_clus = transition_TPM.shape
     for i in range(n_clus[0]):
         for j in range(n_clus[1]):
-            if align_pre[i, j] + align_pos[i, j] < 0.1:
-                align_pre[i, j] = 0
-                align_pos[i, j] = 0
-                align_pre = normalize(align_pre, norm='l1', axis=1)
-                align_pos = normalize(align_pos, norm='l1', axis=0)
-    return align_pre, align_pos
+            if transition_TPM[i, j] + origin_TPM[i, j] < 0.1:
+                transition_TPM[i, j] = 0
+                origin_TPM[i, j] = 0
+                transition_TPM = normalize(transition_TPM, norm='l1', axis=1)
+                origin_TPM = normalize(origin_TPM, norm='l1', axis=0)
+    return transition_TPM, origin_TPM
 
-def plotUMAP(sc_obj, key = 'umap_cell_embeddings', group_by = 'leiden', title = '', label ='UMAP', size = 15):
+
+
+
+
+def plotUMAP(sc_obj, key = 'X_umap', group_by = 'leiden', title = '',  size = 8, colors = None):
     plot_data = pd.DataFrame({'UMAP1':sc_obj.obsm[key][:,0],
                               'UMAP2':sc_obj.obsm[key][:,1],
                               'Cluster':list(sc_obj.obs[ group_by ])})
     plot_data = plot_data.sort_values(by='Cluster', axis=0, ascending=True)
-    ax = sns.scatterplot(data=plot_data, x="UMAP1", y="UMAP2", hue="Cluster", linewidth=0, s=size)
+    
+    palette = colors[:len(plot_data['Cluster'].unique())]
+    ax = sns.scatterplot(data=plot_data, x="UMAP1", y="UMAP2", hue="Cluster", linewidth=0, s=size, palette=palette)
     ax.legend(loc = 2, bbox_to_anchor = (1.01,1), ncol=1)
-    ax.set(title=title, xlabel = label+'1', ylabel = label+'2')
+    ax.set(xlabel = key+'1', ylabel = key+'2')
+    plt.title(label = title, fontsize= 14)  
     return(ax)
 
 
-def plotScore(data, type, Time):
+
+
+def plotScore(data, title, ax, score_type =  'silhouette_score', show_legend=False ):
     size = 3
-
+    cluster_comb = data.obs['leiden_comb']
     cluster_single = data.obs['leiden_single']
-    cluster_whole = data.obs['leiden_all']
-    cluster_ALINE = data.obs['LINE_cluster']
+    cluster_SCG = data.obs['SCG_cluster']
 
-    umap = ['X_umap_all', 'X_umap', 'LINE_umap']
-    if type == 'silhouette_score':
-        a = np.array([metrics.silhouette_score(data.obsm[i], cluster_whole) for i in umap])
+    umap = ['comb_UMAP', 'single_UMAP', 'SCG_UMAP']
+    
+    a = b = c = np.zeros(len(umap))
+    if score_type == 'silhouette_score':
+        a = np.array([metrics.silhouette_score(data.obsm[i], cluster_comb) for i in umap])
         b = np.array([metrics.silhouette_score(data.obsm[i], cluster_single) for i in umap])
-        c = np.array([metrics.silhouette_score(data.obsm[i], cluster_ALINE) for i in umap])
-        print(a, b, c)
-    if type == 'davies_bouldin_score':
-        a = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_whole) for i in umap])
+        c = np.array([metrics.silhouette_score(data.obsm[i], cluster_SCG) for i in umap])
+        #print(a, b, c)
+    elif score_type == 'davies_bouldin_score':
+        a = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_comb) for i in umap])
         b = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_single) for i in umap])
-        c = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_ALINE) for i in umap])
-        print(a, b, c)
+        c = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_SCG) for i in umap])
+        #print(a, b, c)
+    else:
+        print("Invalid score_type. Please choose 'silhouette_score' or 'davies_bouldin_score'.")
+        return None  # 返回None或适当的默认值
+    score_df = pd.DataFrame([a, b, c], columns =umap, index = ['leiden_comb', 'leiden_single', 'SCG_cluster'])
+    
+    score_df.T.plot(kind='bar', ax=ax, fontsize=12)
+    ax.set_title(title+': '+score_type, fontsize=14) 
+    ax.set_ylabel(score_type, fontsize=14) 
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
+    ax.tick_params(axis='both', which='major', labelsize=12)     
+    if show_legend:
+        ax.legend(title="Clusters", title_fontsize='13', fontsize='12', loc='center left', framealpha=0.4, bbox_to_anchor=(1, 0.5))
+    else:
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+    
+    for p in ax.patches:
+        ax.annotate('{:.4f}'.format(p.get_height()), (p.get_x() + p.get_width() / 2., p.get_height()),
+                    ha='center', va='center', fontsize=10, color='black', rotation=0, xytext=(0, 5),
+                    textcoords='offset points')
+    return score_df
+    
+    
+    
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    x = np.arange(size)
-    x_labels = ["UMAP_whole", "UMAP_single", "UMAP_scConGraph"]
-    plt.xticks(x, x_labels)
-
-    total_width, n = 0.8, size
-    width = total_width / n
-    x = x - (total_width - width) / 2
-
-    ax.bar(x, a, width=width, label="Cluster_whole")
-    ax.bar(x + width, b, width=width, label="Cluster_single")
-    ax.bar(x + 2 * width, c, width=width, label="scConGraph_cluster")
-
-    ax.legend()
-    ax.set_title(Time + ': ' + type)
-    plt.show()
-
-def getMetacellExpr(scobj, adata, key):
+def getClusterExpr(scobj, adata, key):
     expr = adata[scobj.obs.index,:].copy()
-    expr_data = expr.X.toarray()
-    clqs = np.unique(list(scobj.obs[key]))
-    clq_pc_data = [np.average(expr_data[np.where(scobj.obs[key] == x)[0], :], axis=0) for x in clqs]
-    clq_pc_data = np.array(clq_pc_data)
-    return (clq_pc_data, clqs)
+    expr_data = expr.X
+    clus = np.unique(list(scobj.obs[key]))
+    clus_pc_data = [np.average(expr_data[np.where(scobj.obs[key] == x)[0], :], axis=0) for x in clus]
+    clus_pc_data = np.array(clus_pc_data)
+    return (clus_pc_data, clus)
 
-def getGraph(cls2cls_sim, cls2cls_sim_tp0, cls2cls_sim_tp1, align_pre, align_pos):
+
+
+
+
+def getGraph(cls2cls_sim, cls2cls_sim_Ctrl, cls2cls_sim_Treat, transition_TPM, origin_TPM):
     import networkx as nx
     G = nx.Graph()
     weight_list=[]
@@ -217,640 +306,654 @@ def getGraph(cls2cls_sim, cls2cls_sim_tp0, cls2cls_sim_tp1, align_pre, align_pos
     weight_list2= []
     weight_list_pair = []
 
-    for i in range(align_pos.shape[0]):
-        for j in range(align_pos.shape[1]):
-            if(align_pos[i, j] > 0  or align_pre[i, j] > 0):
-                nodes1 = 'C_'+str(i)
-                nodes2 = 'T_'+str(j)
+    for i in range(origin_TPM.shape[0]):
+        for j in range(origin_TPM.shape[1]):
+            if (origin_TPM[i, j] > 0  or transition_TPM[i, j] > 0):
+                nodes1 = 'C'+str(i)
+                nodes2 = 'T'+str(j)
                 weight = cls2cls_sim[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
                 set_pair.append((nodes1, nodes2))
                 weight_list_pair.append(weight)
 
-    for i in range(align_pos.shape[0]):
-        for j in range(align_pos.shape[0]):
-            if (i != j ):
-                nodes1 = 'C_'+str(i)
-                nodes2 = 'C_'+str(j)
-                weight = cls2cls_sim_tp0[i, j]
+    for i in range(origin_TPM.shape[0]):
+        for j in range(origin_TPM.shape[0]):
+            if (i != j and cls2cls_sim_Ctrl[i, j] > 0):
+                nodes1 = 'C'+str(i)
+                nodes2 = 'C'+str(j)
+                weight = cls2cls_sim_Ctrl[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
                 set1.append((nodes1, nodes2))
                 weight_list1.append(weight)
 
-    for i in range(align_pos.shape[1]):
-        for j in range(align_pos.shape[1]):
-            if (i != j ):
-                nodes1 = 'T_'+str(i)
-                nodes2 = 'T_'+str(j)
-                weight = cls2cls_sim_tp1[i, j]
+    for i in range(origin_TPM.shape[1]):
+        for j in range(origin_TPM.shape[1]):
+            if (i != j and cls2cls_sim_Treat[i, j] > 0):
+                nodes1 = 'T'+str(i)
+                nodes2 = 'T'+str(j)
+                weight = cls2cls_sim_Treat[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
                 set2.append((nodes1, nodes2))
                 weight_list2.append(weight)
     return G, set1, set2, set_pair, weight_list1, weight_list2, weight_list_pair
 
-def plotGraph(G, align_pos, set1, set2, set_pair,  weight_list1, weight_list2, weight_list_pair):
-    fig = plt.figure(figsize=(5, 3), dpi=300)
-    pos2 = nx.spring_layout(G, iterations=200, seed=2024)
-
-    options = { "node_size": 600, "alpha": 0.9}
-    nx.draw_networkx_nodes(G, pos2, nodelist=['C_'+str(i) for i in range(align_pos.shape[0])], node_color="tab:blue", **options)
-    nx.draw_networkx_nodes(G, pos2, nodelist=['T_'+str(i) for i in range(align_pos.shape[1])], node_color="tab:red", **options)
-
-    nx.draw_networkx_edges(G,
-        pos2,
-        edgelist= set_pair,
-        width= 2,
-        alpha=0.5,
-        edge_color = weight_list_pair,
-        edge_cmap = plt.cm.YlGn
-                          )
 
 
-    nx.draw_networkx_edges(
+
+
+def plotGraph(G, origin_TPM, set1, set2, set_pair,  weight_list1, weight_list2, weight_list_pair):
+    fig = plt.figure(figsize=(9, 4), dpi=300)
+    pos2 = nx.spring_layout(G, iterations=200, seed=2023)
+
+    options = { "node_size": 800, "alpha": 1}
+    nx.draw_networkx_nodes(G, pos2, nodelist=['C'+str(i) for i in range(origin_TPM.shape[0])], node_color="tab:blue", **options)
+    nx.draw_networkx_nodes(G, pos2, nodelist=['T'+str(i) for i in range(origin_TPM.shape[1])], node_color="tab:red", **options)
+
+    a = nx.draw_networkx_edges(
         G,
         pos2,
         edgelist=set2,
         width= 2,
-        alpha=0.5,
-        edge_color = weight_list2,
-        edge_cmap = plt.cm.Reds
+        alpha=0.6,
+        edge_color = weight_list2, 
+        edge_cmap = plt.cm.YlGn, 
+        edge_vmin = 0.05, edge_vmax = 1
     )
 
 
-    nx.draw_networkx_edges(
+    b = nx.draw_networkx_edges(
         G,
         pos2,
         edgelist= set1,
         width=2,
-        alpha=0.5,
-        edge_color = weight_list1,
-        edge_cmap = plt.cm.Blues
+        alpha=0.6,
+        edge_color = weight_list1, 
+        edge_cmap = plt.cm.YlGn, 
+        edge_vmin = 0.05, edge_vmax = 1
     )
+    
+    c= nx.draw_networkx_edges(G,
+        pos2,
+        edgelist= set_pair,
+        width= 2.5, 
+        alpha=0.5,
+        edge_color = weight_list_pair, 
+        edge_cmap = plt.cm.YlGn, 
+        edge_vmin = 0.05, edge_vmax = 1
+    ) 
+    plt.colorbar(a)
 
-    nx.draw_networkx_labels(G, pos2, font_size=4, font_color="whitesmoke")
+    #nx.draw_networkx_labels(G, pos2, font_size=4, font_color="whitesmoke")
+    nx.draw_networkx_labels(G, pos2, font_size=16, font_color="white")
 
     plt.tight_layout()
     plt.axis("off")
 
 
-def GMM_flow(flow_info):
-    ks = np.arange(1, 4)
-    models = [GaussianMixture(k, random_state=0).fit(np.array(flow_info['Min_weight']).reshape(-1, 1)) for k in ks]
-
-    gmm_model_comp = pd.DataFrame({"ks": ks,
-                                   "BIC": [m.bic(np.array(flow_info['Min_weight']).reshape(-1, 1)) for m in models],
-                                   "AIC": [m.aic(np.array(flow_info['Min_weight']).reshape(-1, 1)) for m in models]})
-    return (models, gmm_model_comp)
 
 
-def assignFlowType(flow_info, models, k):
-    gmm_model = models[k - 1]
-    gmm_types = gmm_model.predict(np.array(flow_info['Min_weight']).reshape(-1, 1))
-    gmm_means = gmm_model.means_.reshape(1, -1)
-    flow_info['GMM_Type'] = \
-    np.array(['almost no change', 'change a little', 'change a lot'])[np.argsort(np.argsort(gmm_means))[0]][gmm_types]
-    return (flow_info, gmm_model)
 
-
-def judgePercentVariance(perct):
-    cluster_type = []
-    for i in range(len(perct)):
-        if perct[i] >= 1.2:
-            cluster_type.append('Increase')
-        elif perct[i] < 1.2 and perct[i] > 0.8:
-            cluster_type.append('Invariant')
-        elif perct[i] <= 0.8:
-            cluster_type.append('Decrease')
-    return cluster_type
-
-def getGraph_notdel_dir(cls2cls_sim, cls2cls_sim_tp0, cls2cls_sim_tp1, align_pre, align_pos):
+def getDiGraph(cls2cls_sim, cls2cls_sim_Ctrl, cls2cls_sim_Treat, transition_TPM, origin_TPM):
 
     G = nx.DiGraph()
 
-    for i in range(align_pos.shape[0]):
-        for j in range(align_pos.shape[1]):
+    for i in range(origin_TPM.shape[0]):
+        for j in range(origin_TPM.shape[1]):
             if True:
-                nodes1 = 'C_'+str(i)
-                nodes2 = 'T_'+str(j)
+                nodes1 = 'C'+str(i)
+                nodes2 = 'T'+str(j)
                 weight = cls2cls_sim[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
 
-    for i in range(align_pos.shape[0]):
-        for j in range(align_pos.shape[0]):
+    for i in range(origin_TPM.shape[0]):
+        for j in range(origin_TPM.shape[0]):
             if (i != j ):
-                nodes1 = 'C_'+str(i)
-                nodes2 = 'C_'+str(j)
-                weight = cls2cls_sim_tp0[i, j]
+                nodes1 = 'C'+str(i)
+                nodes2 = 'C'+str(j)
+                weight = cls2cls_sim_Ctrl[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
                 G.add_edge(nodes2, nodes1, weight = weight)
 
-    for i in range(align_pos.shape[1]):
-        for j in range(align_pos.shape[1]):
+    for i in range(origin_TPM.shape[1]):
+        for j in range(origin_TPM.shape[1]):
             if (i != j ):
-                nodes1 = 'T_'+str(i)
-                nodes2 = 'T_'+str(j)
-                weight = cls2cls_sim_tp1[i, j]
+                nodes1 = 'T'+str(i)
+                nodes2 = 'T'+str(j)
+                weight = cls2cls_sim_Treat[i, j]
                 G.add_edge(nodes1, nodes2, weight = weight)
                 G.add_edge(nodes2, nodes1, weight = weight)
-
     return G
 
 
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+    
+    
+def evaluateCertainty(P):
+    P = np.where(P == 0, 1, P)
+    entropy = -np.sum(P * np.log2(P), axis=1)
+    average_entropy = np.mean(entropy)
+    
+    P_ref = np.full((P.shape[0], P.shape[1]), fill_value=1/P.shape[1])
+    entropy_ref = -np.sum(P_ref * np.log2(P_ref), axis=1)
+    average_entropy_ref = np.mean(entropy_ref)
+    
+    Certainty = 1 - average_entropy/average_entropy_ref
+    return Certainty
+
+
+
+
+def assignFlowType(DrugResponse,  thre_abundance = 0.9, thre_STC = 0.2544, TGI = True):
+    if TGI:
+        if  DrugResponse['STC'] >= 0.2544:
+            return 'Acquired resistance'
+        elif DrugResponse['AAC'] >= 0.9:
+            return 'Absolutely intrinsic resistance'
+        elif DrugResponse['RAC'] >= 0.9:
+            return 'Relatively intrinsic resistance'
+        else:
+            return 'Sensitivity'
+    else:
+        if  DrugResponse['STC'] >= 0.2544:
+            return 'Acquired resistance'
+        elif DrugResponse['RAC'] >= 0.9:
+            return 'Intrinsic resistance'
+        else:
+            return 'Sensitivity'
+    
+    
+    
+    
+    
 class scConGraph:
 
-    def __init__(self, data_comb, data_ctrl, data_treat, key, pre_name, pos_name, run_label, pre_colors=None,
-                 pos_colors=None,
-                 cls_prefixes=['C', 'G']):
+    def __init__(self, data_comb, data_ctrl, data_treat, key, ctrl_name, treat_name, ctrl_colors=None,
+                 treat_colors=None, cls_prefixes=['C', 'G'], runLabel = 'Sample', resultPath = ''):
         self.data_comb = data_comb
         self.data_ctrl = data_ctrl
         self.data_treat = data_treat
         self.key = key
-        self.pre_name = pre_name
-        self.pos_name = pos_name
-        self.run_label = run_label
-        self.pre_colors = pre_colors
-        self.pos_colors = pos_colors
-        if self.pre_colors is None:
-            self.pre_colors = ["#FEC643", "#437BFE", "#43FE69", "#FE6943", "#E78AC3",
+        self.ctrl_name = ctrl_name
+        self.treat_name = treat_name
+        self.runLabel = runLabel
+        self.resultPath = resultPath
+        self.ctrl_colors = ctrl_colors
+        self.treat_colors = treat_colors
+        self.transition_TPM = None  
+        self.origin_TPM = None 
+        
+            
+        if self.ctrl_colors is None:
+            self.ctrl_colors = ["#FEC643", "#437BFE", "#43FE69", "#FE6943", "#E78AC3",
                                "#43D9FE", "#FFEC1A", "#E5C494", "#A6D854", "#33AEB1",
                                "#EA6F5D", "#FEE8C3", "#3DBA79", "#D6EBF9", "#7F6699",
                                "#cb7c77", "#68d359", "#6a7dc9", "#c9d73d", "#c555cb",
                                "#333399", "#679966", "#c12e34", "#66d5a5", "#5599ff"]
-        if self.pos_colors is None:
-            self.pos_colors = ['#EE854A', '#4878D0', '#6ACC64', '#D65F5F', '#956CB4',
+        if self.treat_colors is None:
+            self.treat_colors = ['#EE854A', '#4878D0', '#6ACC64', '#D65F5F', '#956CB4',
                                '#82C6E2', '#D5BB67', '#8C613C', '#DC7EC0', '#797979']
         self.cls_prefixes = cls_prefixes
 
+        
+
+        
+        
+    def preProcess(self, regress_out = ['nCount_RNA', 'percent_mito', 'percent_ribo'], npcs=40):
+        print('Preprocess control sample')
+        self.data_ctrl = runScanpyProcess(self.data_ctrl, n_top_genes = 2000, regress_out_variables = regress_out )
+        print('Preprocess treated sample')
+        self.data_treat = runScanpyProcess(self.data_treat, n_top_genes = 2000, regress_out_variables = regress_out)
+        print('Preprocess combined sample')
+        self.data_comb= runScanpyProcess(self.data_comb, n_top_genes = 3000, regress_out_variables = regress_out)
 
 
 
 
-    # proProcess(PCA)
-    def proProcess(scobj, npcs=40):
-        # scobj.raw = scobj
-        # scobj = scobj[:, scobj.var.highly_variable]
-        #
-        # sc.pp.regress_out(scobj, ['nCount_RNA', 'percent_mito', 'percent_ribo'])
-        # sc.pp.scale(scobj, max_value=10)
+    def runClustering(self, resolution_comb = 0.5, resolution_ctrl = 0.5, resolution_treat = 0.5):
+        sc.tl.leiden(self.data_ctrl, key_added='leiden_single', resolution=resolution_ctrl)
+        sc.tl.leiden(self.data_treat, key_added='leiden_single', resolution=resolution_treat)
+        sc.tl.leiden(self.data_comb, key_added='leiden_comb', resolution=resolution_comb)
 
-        sc.tl.pca(scobj.data_comb, svd_solver='arpack')
-        sc.pp.neighbors(scobj.data_comb, n_neighbors=10, n_pcs=npcs)
-        sc.tl.umap(scobj.data_comb)
+        self.data_ctrl.obs['leiden_comb'] = self.data_comb.obs['leiden_comb'][self.data_comb.obs[self.key] == self.ctrl_name].copy()
+        self.data_treat.obs['leiden_comb'] = self.data_comb.obs['leiden_comb'][self.data_comb.obs[self.key] == self.treat_name].copy()
+        self.data_comb.obs['leiden_single'] = pd.concat([self.data_ctrl.obs['leiden_single'],
+                                                          self.data_treat.obs['leiden_single']], axis=0).copy()
+        
+        
+        self.data_comb.obsm['comb_UMAP'] = self.data_comb.obsm['X_umap'].copy()
+        self.data_ctrl.obsm['comb_UMAP'] = self.data_comb.obsm['X_umap'][self.data_comb.obs[self.key] == self.ctrl_name, :].copy()
+        self.data_treat.obsm['comb_UMAP'] = self.data_comb.obsm['X_umap'][self.data_comb.obs[self.key] == self.treat_name, :].copy()
+        
+        self.data_ctrl.obsm['single_UMAP'] = self.data_ctrl.obsm['X_umap'].copy()
+        self.data_treat.obsm['single_UMAP'] = self.data_treat.obsm['X_umap'].copy()
 
-        sc.tl.pca(scobj.data_ctrl, svd_solver='arpack')
-        sc.pp.neighbors(scobj.data_ctrl, n_neighbors=10, n_pcs=npcs)
-        sc.tl.umap(scobj.data_ctrl)
 
-        sc.tl.pca(scobj.data_treat, svd_solver='arpack')
-        sc.pp.neighbors(scobj.data_treat, n_neighbors=10, n_pcs=npcs)
-        sc.tl.umap(scobj.data_treat)
 
-        return (scobj)
+    def calculateAffinity(self, k=3, alpha= [20, 50], resultPath = None):
+        if resultPath is None:
+            resultPath = self.resultPath
+        
+        PC_data_ctrl = self.data_ctrl.obsm['X_pca']
+        PC_data_treat = self.data_treat.obsm['X_pca']
+        PC_data_comb = self.data_comb.obsm['X_pca']
+        n_cells = np.array([self.data_ctrl.shape[0], self.data_treat.obs.shape[0]])
+     
+        PC_data_comb_ctrl = PC_data_comb[0: n_cells[0], :]
+        PC_data_comb_treat = PC_data_comb[n_cells[0]: (n_cells[0] + n_cells[1]), :]
+        
+        sim_Ctrl = getSimilarity(PC_data_ctrl, PC_data_ctrl, k=k, alpha=alpha[0])
+        sim_Treat = getSimilarity(PC_data_treat, PC_data_treat, k=k, alpha=alpha[0])
+        sim_Ctrl_Treat = getSimilarity(PC_data_comb_ctrl, PC_data_comb_treat, k=k, alpha=alpha[0])
 
-    # runCluster
-    def runClustering(scobj, res=0.5):
-        sc.tl.leiden(scobj.data_ctrl, key_added='leiden_single', resolution=res)
-        sc.tl.leiden(scobj.data_treat, key_added='leiden_single', resolution=res)
-        sc.tl.leiden(scobj.data_comb, key_added='leiden_all', resolution=res)
+        np.savetxt(resultPath + runLabel + '_Comb_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Ctrl_Treat)
+        np.savetxt(resultPath + runLabel + '_Ctrl_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Ctrl)
+        np.savetxt(resultPath + runLabel + '_Treat_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Treat)
 
-        scobj.data_ctrl.obs['leiden_all'] = scobj.data_comb.obs['leiden_all'][
-            scobj.data_comb.obs[scobj.key] == scobj.pre_name]
-        scobj.data_treat.obs['leiden_all'] = scobj.data_comb.obs['leiden_all'][
-            scobj.data_comb.obs[scobj.key] == scobj.pos_name]
-        scobj.data_comb.obs['leiden_single'] = pd.concat([scobj.data_ctrl.obs['leiden_single'],
-                                                          scobj.data_treat.obs['leiden_single']], axis=0)
+        rows, cols = np.where(sim_Ctrl_Treat != 0)
+        #edge_weight_comb = [(f'C{i}', f'T{j}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)]
+        edge_weight_comb = [(f'C{i}', f'T{j}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)] + [(f'T{j}', f'C{i}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)] 
 
-        scobj.data_ctrl.obsm['X_umap_all'] = scobj.data_comb.obsm['X_umap'][
-                                             scobj.data_comb.obs[scobj.key] == scobj.pre_name, :]
-        scobj.data_treat.obsm['X_umap_all'] = scobj.data_comb.obsm['X_umap'][
-                                              scobj.data_comb.obs[scobj.key] == scobj.pos_name, :]
+        rows, cols = np.where(np.triu(sim_Ctrl, k=1) != 0)
+        edge_weight_ctrl = [(f'C{i}', f'C{j}', sim_Ctrl[i, j]) for i, j in zip(rows, cols)] + [(f'C{j}', f'C{i}', sim_Ctrl[i, j]) for i, j in zip(rows, cols)]
 
-    def calculateAffinity(scobj,  resultpath,runLabel,k=3, alpha=20):
-        PC_data_B1 = scobj.data_ctrl.obsm['X_pca']
-        PC_data_B2 = scobj.data_treat.obsm['X_pca']
-        PC_data_all = scobj.data_comb.obsm['X_pca']
-        n_clus = np.array(
-            [len(scobj.data_ctrl.obs["leiden_single"].unique()), len(scobj.data_treat.obs["leiden_single"].unique())])
-        n_cells = np.array([scobj.data_ctrl.shape[0], scobj.data_treat.obs.shape[0]])
-        PC_data_all_B1 = PC_data_all[0: n_cells[0], :]
+        rows, cols = np.where(np.triu(sim_Treat, k=1) != 0)
+        edge_weight_treat = [(f'T{i}', f'T{j}', sim_Treat[i, j]) for i, j in zip(rows, cols)] +  [(f'T{j}', f'T{i}', sim_Treat[i, j]) for i, j in zip(rows, cols)] 
 
-        PC_data_all_B2 = PC_data_all[n_cells[0]: (n_cells[0] + n_cells[1]), :]
-
-        global_sim_B1 = getSimilarity(PC_data_B1, PC_data_B1, k=k, alpha=alpha)
-        global_sim_B2 = getSimilarity(PC_data_B2, PC_data_B2, k=k, alpha=alpha)
-        pair_sim_B1B2 = getSimilarity(PC_data_all_B1, PC_data_all_B2, k=k, alpha=alpha)
-
-        np.savetxt(resultpath + runLabel + '_CG_similarity_alpha' + str(alpha) + '_raw.txt', pair_sim_B1B2)
-        np.savetxt(resultpath + runLabel + '_Ctrl_similarity_alpha' + str(alpha) + '_raw.txt', global_sim_B1)
-        np.savetxt(resultpath + runLabel + '_Gemc_similarity_alpha' + str(alpha) + '_raw.txt', global_sim_B2)
-
-        rows, cols = np.where(pair_sim_B1B2 != 0)
-        edge_weight_comb = [(f'C{i}', f'G{j}', pair_sim_B1B2[i, j]) for i, j in zip(rows, cols)]
-
-        rows, cols = np.where(np.triu(global_sim_B1, k=1) != 0)
-        edge_weight_ctrl = [(f'C{i}', f'C{j}', global_sim_B1[i, j]) for i, j in zip(rows, cols)]
-
-        rows, cols = np.where(np.triu(global_sim_B2, k=1) != 0)
-        edge_weight_treat = [(f'G{i}', f'G{j}', global_sim_B2[i, j]) for i, j in zip(rows, cols)]
-
-        np.savetxt(resultpath + runLabel + '_CG_edge_weight_alpha' + str(alpha) + '_raw.txt', edge_weight_comb,
+        np.savetxt(resultPath + runLabel + '_Comb_edge_weight_alpha' + str(alpha[0]) + '_raw.txt', edge_weight_comb,
                    fmt='%s', delimiter='\t')
-        np.savetxt(resultpath + runLabel + '_C_edge_weight_alpha' + str(alpha) + '_raw.txt', edge_weight_ctrl, fmt='%s',
+        np.savetxt(resultPath + runLabel + '_Ctrl_edge_weight_alpha' + str(alpha[0]) + '_raw.txt', edge_weight_ctrl, fmt='%s',
                    delimiter='\t')
-        np.savetxt(resultpath + runLabel + '_G_edge_weight_alpha' + str(alpha) + '_raw.txt', edge_weight_treat,
+        np.savetxt(resultPath + runLabel + '_Treat_edge_weight_alpha' + str(alpha[0]) + '_raw.txt', edge_weight_treat,
                    fmt='%s', delimiter='\t')
+                   
+        sparse_sim_Ctrl_Treat = getSimilarity(PC_data_comb_ctrl, PC_data_comb_treat, k=k, alpha=alpha[1])
+        np.savetxt(resultPath + runLabel + '_Comb_similarity_alpha' + str(alpha[1]) + '_raw.txt', sparse_sim_Ctrl_Treat)
 
-        return pair_sim_B1B2, global_sim_B1, global_sim_B2
+        return sparse_sim_Ctrl_Treat
 
-    def ALINE(path, resultpath,runLabel, order=1, size_1ord=100, size_2ord=100, negative=5, samples=500, alpha=20):
+
+
+    
+
+    def runEmbedding(self, path, size_1ord=100, size_2ord=100, negative=5, samples=500, alpha=20):
+        resultPath = self.resultPath
+        runLabel = self.runLabel
+
         time_start = time.time()
-        edges = resultpath + runLabel + '_C_edge_weight_alpha' + str(alpha) + '_raw.txt'
-        output = resultpath + runLabel + '_Ctrl_1st_embed' + str(size_1ord) + '.txt'
+        edges = resultPath + runLabel + '_Ctrl_edge_weight_alpha' + str(alpha) + '_raw.txt'
+        output = resultPath + runLabel + '_Ctrl_1st_embeddings.txt'
         runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples)
 
-        edges = resultpath + runLabel + '_G_edge_weight_alpha' + str(alpha) + '_raw.txt'
-        output = resultpath + runLabel + '_Gemc_1st_embed' + str(size_1ord) + '.txt'
-        runLINE(path, edges=edges, output=output, order=order, size=size_1ord, negative=negative, samples=samples)
+        edges = resultPath + runLabel + '_Treat_edge_weight_alpha' + str(alpha) + '_raw.txt'
+        output = resultPath + runLabel + '_Treat_1st_embeddings' + str(size_1ord) + '.txt'
+        runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples)
 
-        edges = resultpath + runLabel + '_CG_edge_weight_alpha' + str(alpha) + '_raw.txt'
-        output = resultpath + runLabel + '_2nd_embed' + str(size_2ord) + '.txt'
-        runLINE(path, edges=edges, output=output, order=order, size=size_2ord, negative=negative, samples=samples)
+        edges = resultPath + runLabel + '_Comb_edge_weight_alpha' + str(alpha) + '_raw.txt'
+        output = resultPath + runLabel + '_2nd_embeddings.txt'
+        runLINE(path, edges=edges, output=output, order=2, size=size_2ord, negative=negative, samples=samples)
 
         time_end = time.time()
         print('time cost', time_end - time_start, 's')
 
-    def ConGraphCluster(scobj, resultpath,runLabel, size_1ord=100, size_2ord=100, negative=5, samples=500, alpha=20,
-                        res=0.3):
-        n_cells = np.array([scobj.data_ctrl.obs.shape[0], scobj.data_treat.obs.shape[0]])
-        cell_name_B1_id = ['C' + str(i) for i in range(n_cells[0])]
-        # print(len(cell_name_B1_id))
-        cell_name_B2_id = ['G' + str(i) for i in range(n_cells[1])]
-        # print(len(cell_name_B2_id))
-        cell_name_B1B2_id = cell_name_B1_id.copy()
-        cell_name_B1B2_id.extend(cell_name_B2_id)
-        # print(len(cell_name_B1B2_id))
 
-        scobj.data_ctrl.obs['simple_id'] = cell_name_B1_id
-        scobj.data_treat.obs['simple_id'] = cell_name_B2_id
 
-        cell_name_B1 = scobj.data_ctrl.obs_names.tolist()
-        cell_name_B2 = scobj.data_treat.obs_names.tolist()
-        cell_name_B1B2 = scobj.data_ctrl.obs_names.tolist()
-        cell_name_B1B2.extend(scobj.data_treat.obs_names.tolist())
-        # print(len(cell_name_B1B2))
 
-        embed_B1_1st_raw = pd.read_csv(resultpath + runLabel + '_Ctrl_1st_embed' + str(size_1ord) + '.txt',
+
+    def scConGraphCluster(self,  resolution_ctrl = 0.5, resolution_treat = 0.5):
+        resultPath = self.resultPath
+        runLabel = self.runLabel
+        
+        n_cells = np.array([self.data_ctrl.obs.shape[0], self.data_treat.obs.shape[0]])
+        cell_name_ctrl_id = ['C' + str(i) for i in range(n_cells[0])]
+        cell_name_treat_id = ['T' + str(i) for i in range(n_cells[1])]
+
+        cell_name_ctrl_treat_id = cell_name_ctrl_id.copy()
+        cell_name_ctrl_treat_id.extend(cell_name_treat_id)
+
+        self.data_ctrl.obs['simple_id'] = cell_name_ctrl_id
+        self.data_treat.obs['simple_id'] = cell_name_treat_id
+
+        cell_name_ctrl = self.data_ctrl.obs_names.tolist()
+        cell_name_treat = self.data_treat.obs_names.tolist()
+        cell_name_ctrl_treat = self.data_ctrl.obs_names.tolist()
+        cell_name_ctrl_treat.extend(self.data_treat.obs_names.tolist())
+
+        
+        embed_ctrl_1st_raw = pd.read_csv(resultPath + runLabel + '_Ctrl_1st_embeddings.txt',
                                        skiprows=1, header=None, index_col=0,
                                        delim_whitespace=True)
-        embed_B1_1st = embed_B1_1st_raw.loc[cell_name_B1_id, :]
-        embed_B1_1st = embed_B1_1st.set_axis(cell_name_B1, axis=0)
+        embed_ctrl_1st = embed_ctrl_1st_raw.loc[cell_name_ctrl_id, :]
+        embed_ctrl_1st = embed_ctrl_1st.set_axis(cell_name_ctrl, axis=0)
 
-        embed_B2_1st_raw = pd.read_csv(resultpath + runLabel + '_Gemc_1st_embed' + str(size_1ord) + '.txt',
+        embed_treat_1st_raw = pd.read_csv(resultPath + runLabel + '_Treat_1st_embeddings.txt',
                                        skiprows=1, header=None, index_col=0,
                                        delim_whitespace=True)
-        embed_B2_1st = embed_B2_1st_raw.loc[cell_name_B2_id, :]
-        embed_B2_1st = embed_B2_1st.set_axis(cell_name_B2, axis=0)
+        embed_treat_1st = embed_treat_1st_raw.loc[cell_name_treat_id, :]
+        embed_treat_1st = embed_treat_1st.set_axis(cell_name_treat, axis=0)
 
-        embed_B1_1st = embed_B1_1st.loc[scobj.data_ctrl.obs_names]
-        embed_B2_1st = embed_B2_1st.loc[scobj.data_treat.obs_names]
+        embed_ctrl_1st = embed_ctrl_1st.loc[self.data_ctrl.obs_names]
+        embed_treat_1st = embed_treat_1st.loc[self.data_treat.obs_names]
 
-        # cat and normalize embedding
-        embed_B1B2_2nd_raw = pd.read_csv(resultpath + runLabel + '_2nd_embed' + str(size_2ord) + '.txt',
+        # cate and normalize embedding
+        embed_ctrl_treat_2nd_raw = pd.read_csv(resultPath + runLabel + '_2nd_embeddings.txt',
                                          skiprows=1, header=None, index_col=0,
                                          delim_whitespace=True)
-        embed_B1B2_2nd = embed_B1B2_2nd_raw.loc[cell_name_B1B2_id,]
-        # print(embed_B1B2_2nd.index)
-        embed_B1B2_2nd = embed_B1B2_2nd.set_axis(cell_name_B1B2, axis=0)
-        # print(embed_B1B2_2nd.index)
+        embed_ctrl_treat_2nd = embed_ctrl_treat_2nd_raw.loc[cell_name_ctrl_treat_id,]
+        embed_ctrl_treat_2nd = embed_ctrl_treat_2nd.set_axis(cell_name_ctrl_treat, axis=0)
 
-        embed_B1_2nd = embed_B1B2_2nd.loc[scobj.data_ctrl.obs_names]
-        embed_B2_2nd = embed_B1B2_2nd.loc[scobj.data_treat.obs_names]
+        embed_ctrl_2nd = embed_ctrl_treat_2nd.loc[self.data_ctrl.obs_names]
+        embed_treat_2nd = embed_ctrl_treat_2nd.loc[self.data_treat.obs_names]
 
-        embed_B1 = norm_embedding(embed_1st=embed_B1_1st, embed_2nd_1=embed_B1_2nd,
+        embed_ctrl = norm_embedding(embed_1st=embed_ctrl_1st, embed_2nd_1=embed_ctrl_2nd,
                                   mode=0, weight=[1, 1])
-        embed_B2 = norm_embedding(embed_1st=embed_B2_1st, embed_2nd_1=embed_B2_2nd,
+        embed_treat = norm_embedding(embed_1st=embed_treat_1st, embed_2nd_1=embed_treat_2nd,
                                   mode=0, weight=[1, 1])
 
         # Run clustering
-        scobj.data_ctrl = runLineClustering(scobj.data_ctrl, embed_B1, key='LINE', resolution=res)
-        scobj.data_treat = runLineClustering(scobj.data_treat, embed_B2, key='LINE', resolution=res)
-        scobj.data_ctrl.obsm['LINE_umap'] = scobj.data_ctrl.obsm['X_umap']
-        scobj.data_treat.obsm['LINE_umap'] = scobj.data_treat.obsm['X_umap']
+        self.data_ctrl = runLINEClustering(self.data_ctrl, embed_ctrl, key='SCG', resolution=resolution_ctrl)
+        self.data_treat = runLINEClustering(self.data_treat, embed_treat, key='SCG', resolution=resolution_treat)
+        self.data_ctrl.obsm['SCG_UMAP'] = self.data_ctrl.obsm['X_umap']
+        self.data_treat.obsm['SCG_UMAP'] = self.data_treat.obsm['X_umap']
 
-    def cls2cls(scobj, weight_qc_mat, resultpath,runLabel, res=0.3):
+
+
+
+
+    def Alignment(self, weight_qc_mat):
         # obtain the cls2cls matrix
-        align_pre = cls2cls_prob(scobj.data_ctrl, scobj.data_treat, weight_qc_mat, thre_cell=0.05, thre_cls=0.05)
-        weight_mat_t = np.transpose(weight_qc_mat)
+        resultPath = self.resultPath
+        runLabel = self.runLabel
+        
+        transition_TPM = cls2cls_prob(self.data_ctrl, self.data_treat, weight_qc_mat, thre_cell=0.05, thre_cls=0.05)
+        transition_TPM_raw = cls2cls_prob(self.data_ctrl, self.data_treat, weight_qc_mat, thre_cell=0.05, thre_cls=0)
+        
+        weight_qc_mat_transpose = np.transpose(weight_qc_mat)
+        origin_TPM = cls2cls_prob(self.data_treat, self.data_ctrl, weight_qc_mat_transpose, thre_cell=0.05, thre_cls=0.05)
+        origin_TPM = np.transpose(origin_TPM)
+        origin_TPM_raw = cls2cls_prob(self.data_treat, self.data_ctrl, weight_qc_mat_transpose, thre_cell=0.05, thre_cls=0)
+        origin_TPM_raw = np.transpose(origin_TPM_raw)
+        
+        tmp = rapid_QC(transition_TPM, origin_TPM)
+        transition_TPM = tmp[0]
+        origin_TPM = tmp[1]
+#         print(origin_TPM)
+#         print(transition_TPM)
+        
+        for i in range(transition_TPM.shape[0]):
+            for j in range(transition_TPM.shape[1]):
+                if ((transition_TPM[i, j] ==0) and (origin_TPM[i, j] == 0)):
+                    origin_TPM_raw[i, j] = 0
+                    transition_TPM_raw[i, j] = 0
+                    
+        transition_TPM_final = normalize(origin_TPM_raw,  norm='l1')
+        origin_TPM_final = normalize(origin_TPM_raw,  axis = 0,  norm='l1')
+        
+        self.transition_TPM = transition_TPM_final
+        self.origin_TPM = origin_TPM_final
 
-        align_pos = cls2cls_prob(scobj.data_treat, scobj.data_ctrl, weight_mat_t, thre_cell=0.05, thre_cls=0.05)
-        align_pos = np.transpose(align_pos)
+        np.savetxt(resultPath + runLabel + '_transition_TPM_probability.txt', transition_TPM_final)
+        np.savetxt(resultPath + runLabel + '_origin_TPM_probability.txt', origin_TPM_final)
 
-        tmp = rapid_small(align_pre, align_pos)
-        align_pre = tmp[0]
-        align_pos = tmp[1]
 
-        np.savetxt(resultpath + runLabel + '_align_pre_probability_res' + str(res) + '.txt', align_pre)
-        np.savetxt(resultpath + runLabel + '_align_pos_probability_res' + str(res) + '.txt', align_pos)
+        return transition_TPM_final, origin_TPM_final
 
-        return align_pre, align_pos
 
-    def showUMAP(scobj):
-        fig = plt.figure(figsize=(20, 8), dpi=300)
+
+
+
+    def showUMAP(self, UMAP = 'SCG_UMAP', Cluster = 'SCG_cluster'):
+        titles = [Cluster + '_Ctrl', Cluster + '_Treat']
+        fig = plt.figure(figsize=(10, 4.5), dpi=300)
         ax1 = fig.add_subplot(1, 2, 1)
-        plotUMAP(scobj.data_ctrl, key='LINE_umap', group_by='LINE_cluster', title='LINE-Ctrl')
+        plotUMAP(self.data_ctrl, key=UMAP, group_by= Cluster, title = titles[0], colors = self.ctrl_colors)
         ax2 = fig.add_subplot(1, 2, 2)
-        plotUMAP(scobj.data_treat, key='LINE_umap', group_by='LINE_cluster', title='LINE-Treat')
+        plotUMAP(self.data_treat, key=UMAP, group_by=Cluster, title =  titles[1], colors = self.treat_colors)
         fig.tight_layout()
 
-    def showHeatmap(align_pre, align_pos):
-        fig = plt.figure(figsize=(20, 8), dpi=300)
+
+        
+
+    def showHeatmap(self, transition_TPM = None, origin_TPM = None):
+        if transition_TPM is None:
+            transition_TPM = self.transition_TPM
+        if origin_TPM is None:
+            origin_TPM = self.origin_TPM
+
+        columns = ['T{}'.format(i) for i in range(transition_TPM.shape[1])]
+        index = ['C{}'.format(i) for i in range(transition_TPM.shape[0])]
+        
+        fig = plt.figure(figsize=(10, 4.5), dpi=300)
         ax1 = fig.add_subplot(1, 2, 1)
-        sns.heatmap(pd.DataFrame(align_pre), annot=True, linewidths=.5, cmap="YlGnBu")
-        plt.xlabel('Post cluster')
-        plt.ylabel('Pre cluster')
+        sns.heatmap(pd.DataFrame(transition_TPM, index=index, columns=columns), annot=True, linewidths=.5, cmap="YlGnBu")
+        plt.xlabel('Treated cluster')
+        plt.ylabel('Control cluster')
+        plt.title(label = 'Transition TPM', fontsize= 14)  
 
         ax1 = fig.add_subplot(1, 2, 2)
-        sns.heatmap(pd.DataFrame(align_pos), annot=True, linewidths=.5, cmap="YlGnBu")
-        plt.xlabel('Post cluster')
-        plt.ylabel('Pre cluster')
+        sns.heatmap(pd.DataFrame(origin_TPM, index=index, columns=columns), annot=True, linewidths=.5, cmap="YlGnBu")
+        plt.xlabel('Treated cluster')
+        plt.ylabel('Control cluster')
+        plt.title(label = 'Origin TPM', fontsize= 14)  
         fig.tight_layout()
 
-    def rank_genes(scobj):
-        scobj.data_ctrl.uns['log1p']["base"] = None
-        sc.tl.rank_genes_groups(scobj.data_ctrl, 'LINE_cluster', method='wilcoxon')
-        scobj.data_treat.uns['log1p']["base"] = None
-        sc.tl.rank_genes_groups(scobj.data_treat, 'LINE_cluster', method='wilcoxon')
 
-        sc.pl.rank_genes_groups_heatmap(scobj.data_ctrl, n_genes=20, use_raw=True, swap_axes=True,
+
+
+
+    def rank_genes(self):
+        self.data_ctrl.uns['log1p']["base"] = None
+        sc.tl.rank_genes_groups(self.data_ctrl, 'SCG_cluster', method='wilcoxon')
+        self.data_treat.uns['log1p']["base"] = None
+        sc.tl.rank_genes_groups(self.data_treat, 'SCG_cluster', method='wilcoxon')
+
+        sc.pl.rank_genes_groups_heatmap(self.data_ctrl, n_genes=20, use_raw=True, swap_axes=True,
                                         show_gene_labels=True)
-        sc.pl.rank_genes_groups_heatmap(scobj.data_treat, n_genes=20, use_raw=True, swap_axes=True,
+        sc.pl.rank_genes_groups_heatmap(self.data_treat, n_genes=20, use_raw=True, swap_axes=True,
                                         show_gene_labels=True)
 
-    def showScore(scobj, type):
-        plotScore(scobj.data_ctrl, type, 'Ctrl')
-        plotScore(scobj.data_treat, type, 'Treat')
 
-    def clusterlevel(scobj,align_pre,align_pos):
-        scobj.data_ctrl.obs['LINE_cluster_name'] = ['C' + str(i) for i in scobj.data_ctrl.obs['LINE_cluster']]
-        scobj.data_treat.obs['LINE_cluster_name'] = ['T' + str(i) for i in scobj.data_treat.obs['LINE_cluster']]
 
-        scobj.data_comb.obs['LINE_cluster'] = pd.concat([scobj.data_ctrl.obs['LINE_cluster_name'],
-                                                         scobj.data_treat.obs['LINE_cluster_name']], axis=0)
 
-        bulk_expr_B1, clus_B1 = getMetacellExpr(scobj.data_ctrl, scobj.data_comb, key='LINE_cluster')
-        bulk_expr_B2, clus_B2 = getMetacellExpr(scobj.data_treat, scobj.data_comb, key='LINE_cluster')
-        bulk_expr, clus = getMetacellExpr(scobj.data_comb, scobj.data_comb, key='LINE_cluster')
 
-        clus_B1 = ['C' + str(i) for i in clus_B1]
-        bulk_expr_B1 = pd.DataFrame(bulk_expr_B1.transpose(), index=scobj.data_comb.var_names, columns=clus_B1)
+    def evaluateClustering(self, score_type = 'silhouette_score'):
+        fig, axs = plt.subplots(1, 2, figsize=(16, 4.5)) 
+        score_df1 = plotScore(self.data_ctrl, title = 'Ctrl', ax = axs[0], score_type = score_type, show_legend=False)
+        score_df2 = plotScore(self.data_treat, title = 'Treat', ax = axs[1], score_type = score_type, show_legend=True)
+        #plt.subplots_adjust(right=0.8)  # 根据需要调整这个值
 
-        clus_B2 = ['T' + str(i) for i in clus_B2]
-        bulk_expr_B2 = pd.DataFrame(bulk_expr_B2.transpose(), index=scobj.data_comb.var_names, columns=clus_B2)
+        plt.show()
+        return score_df1, score_df2
 
-        bulk_expr = pd.DataFrame(bulk_expr.transpose(), index=scobj.data_comb.var_names, columns=clus)
+
+
+
+
+
+
+
+    def showClusterGraph(self):
+        transition_TPM = self.transition_TPM
+        origin_TPM = self.origin_TPM
+        self.data_ctrl.obs['SCG_cluster_name'] = ['C' + str(i) for i in self.data_ctrl.obs['SCG_cluster']]
+        self.data_treat.obs['SCG_cluster_name'] = ['T' + str(i) for i in self.data_treat.obs['SCG_cluster']]
+
+        self.data_comb.obs['SCG_cluster_name'] = pd.concat([self.data_ctrl.obs['SCG_cluster_name'],
+                                                         self.data_treat.obs['SCG_cluster_name']], axis=0)
+
+        clus_ctrl = np.unique(list(self.data_ctrl.obs['SCG_cluster_name']))
+        clus_treat = np.unique(list(self.data_treat.obs['SCG_cluster_name']))
+
+        bulk_expr, clus = getClusterExpr(self.data_comb, self.data_comb, key='SCG_cluster_name')
+        bulk_expr = pd.DataFrame(bulk_expr.transpose(), index=self.data_comb.var_names, columns=clus)
+        bulk_expr_hrg = bulk_expr.loc[self.data_comb.var.highly_variable, :]
+        #print(bulk_expr.shape)
+        #print(bulk_expr_hrg.shape)
 
         k_value = 3
         alpha_value = 5
-        sim = getSimilarity(bulk_expr.transpose(), bulk_expr.transpose(), k=k_value, alpha=alpha_value)
-        sim_df = pd.DataFrame(sim, index=bulk_expr.columns, columns=bulk_expr.columns)
+        sim = getSimilarity(bulk_expr_hrg.transpose(), bulk_expr_hrg.transpose(), k=k_value, alpha=alpha_value)
+        sim_df = pd.DataFrame(sim, index=bulk_expr_hrg.columns, columns=bulk_expr_hrg.columns)
 
-        cls2cls_sim = np.array(sim_df.loc[clus_B1, clus_B2])
-        cls2cls_sim_B1 = np.array(sim_df.loc[clus_B1, clus_B1])
-        cls2cls_sim_B2 = np.array(sim_df.loc[clus_B2, clus_B2])
+        cls2cls_sim = np.array(sim_df.loc[clus_ctrl, clus_treat])
+        cls2cls_sim_ctrl = np.array(sim_df.loc[clus_ctrl, clus_ctrl])
+        cls2cls_sim_treat = np.array(sim_df.loc[clus_treat, clus_treat])
 
-        G, set1, set2, set_pair, weight_list1, weight_list2, weight_list_pair = getGraph(cls2cls_sim, cls2cls_sim_B1,
-                                                                                         cls2cls_sim_B2, align_pre,
-                                                                                         align_pos)
-        plotGraph(G, align_pos, set1, set2, set_pair, weight_list1, weight_list2, weight_list_pair)
+        G, set1, set2, set_pair, weight_list1, weight_list2, weight_list_pair = getGraph(cls2cls_sim, cls2cls_sim_ctrl,
+                                                                                         cls2cls_sim_treat, transition_TPM,
+                                                                                         origin_TPM)
+        plotGraph(G, origin_TPM, set1, set2, set_pair, weight_list1, weight_list2, weight_list_pair)
 
         plt.show()
 
-    def drugresponse(scobj, weight_qc_mat):
 
-        align_pre = cls2cls_prob(scobj.data_ctrl, scobj.data_treat, weight_qc_mat, thre_cell=0.05, thre_cls=0.05)
-        weight_mat_t = np.transpose(weight_qc_mat)
-        align_pos = cls2cls_prob(scobj.data_treat, scobj.data_ctrl, weight_mat_t, thre_cell=0.05, thre_cls=0.05)
-        align_pos = np.transpose(align_pos)
-        tmp = rapid_small(align_pre, align_pos)
-        align_pre = tmp[0]
-        align_pos = tmp[1]
 
-        align_pre_raw = cls2cls_prob(scobj.data_ctrl, scobj.data_treat, weight_qc_mat, thre_cell=0, thre_cls=0)
-        weight_mat_t = np.transpose(weight_qc_mat)
-        align_pos_raw = cls2cls_prob(scobj.data_treat, scobj.data_ctrl, weight_mat_t, thre_cell=0, thre_cls=0)
-        align_pos_raw = np.transpose(align_pos_raw)
 
-        n_clus = [align_pre.shape[0], align_pre.shape[1]]
 
-        num1 = Counter(scobj.data_ctrl.obs['LINE_cluster'])
-        n_cells_B1 = [num1[str(i)] for i in range(n_clus[0])]
-        num2 = Counter(scobj.data_treat.obs['LINE_cluster'])
-        n_cells_B2 = [num2[str(i)] for i in range(n_clus[1])]
+    def DrugResponse(self, weight_qc_mat):
+        transition_TPM = self.transition_TPM
+        origin_TPM = self.origin_TPM
+        
+        n_clus = [transition_TPM.shape[0], transition_TPM.shape[1]]
+        
+        # Cluster size
+        num1 = Counter(self.data_ctrl.obs['SCG_cluster'])
+        n_cells_ctrl = [num1[str(i)] for i in range(n_clus[0])]
+        num2 = Counter(self.data_treat.obs['SCG_cluster'])
+        n_cells_treat = [num2[str(i)] for i in range(n_clus[1])]
+        
+        # Cluster proportion
+        perct_clus_ctrl = [n_cells_ctrl[i] / self.data_ctrl.shape[0] for i in range(len(n_cells_ctrl))]
+        perct_clus_treat = [n_cells_treat[i] / self.data_treat.shape[0] for i in range(len(n_cells_treat))]
 
-        perct_clus_B1 = [n_cells_B1[i] / scobj.data_ctrl.shape[0] for i in range(len(n_cells_B1))]
-        perct_clus_B2 = [n_cells_B2[i] / scobj.data_treat.shape[0] for i in range(len(n_cells_B2))]
-
-        align_pre_mat = align_pre.copy()
-        align_pos_mat = align_pos.copy()
+        # Flow proportion
+        transition_TPM_mat = transition_TPM.copy()
+        origin_TPM_mat = origin_TPM.copy()
         for i in range(n_clus[0]):
-            align_pre_mat[i, :] = perct_clus_B1[i] * align_pre[i, :]
+            transition_TPM_mat[i, :] = perct_clus_ctrl[i] * transition_TPM[i, :]
 
         for j in range(n_clus[1]):
-            align_pos_mat[:, j] = perct_clus_B2[j] * align_pos[:, j]
+            origin_TPM_mat[:, j] = perct_clus_treat[j] * origin_TPM[:, j]
 
-        align_pre_mat_raw = align_pre_raw.copy()
-        align_pos_mat_raw = align_pos_raw.copy()
-        for i in range(n_clus[0]):
-            align_pre_mat_raw[i, :] = perct_clus_B1[i] * align_pre_raw[i, :]
+        #ctrl_clus_perct1 = np.sum(transition_TPM_mat, axis=1)
+        #treat_clus_perct2 = np.sum(origin_TPM_mat, axis=0)
+        
+        # calculate STC
+        self.data_ctrl.obs['SCG_cluster_name'] = ['C' + str(i) for i in self.data_ctrl.obs['SCG_cluster']]
+        self.data_treat.obs['SCG_cluster_name'] = ['T' + str(i) for i in self.data_treat.obs['SCG_cluster']]
 
-        for j in range(n_clus[1]):
-            align_pos_mat_raw[:, j] = perct_clus_B2[j] * align_pos_raw[:, j]
-
-        pre_clus_perct1 = np.sum(align_pre_mat, axis=1)
-        pre_clus_perct2 = np.sum(align_pos_mat, axis=1)
-        pos_clus_perct1 = np.sum(align_pre_mat, axis=0)
-        pos_clus_perct2 = np.sum(align_pos_mat, axis=0)
-
-        scobj.data_ctrl.obs['LINE_cluster_name'] = ['C' + str(i) for i in scobj.data_ctrl.obs['LINE_cluster']]
-        scobj.data_treat.obs['LINE_cluster_name'] = ['T' + str(i) for i in scobj.data_treat.obs['LINE_cluster']]
-
-        scobj.data_comb.obs['LINE_cluster'] = pd.concat([scobj.data_ctrl.obs['LINE_cluster_name'],
-                                                         scobj.data_treat.obs['LINE_cluster_name']], axis=0)
-        bulk_expr_B1, clus_B1 = getMetacellExpr(scobj.data_ctrl, scobj.data_comb, key='LINE_cluster')
-        bulk_expr_B2, clus_B2 = getMetacellExpr(scobj.data_treat, scobj.data_comb, key='LINE_cluster')
-        bulk_expr, clus = getMetacellExpr(scobj.data_comb, scobj.data_comb, key='LINE_cluster')
-        clus_B1 = ['C' + str(i) for i in clus_B1]
-        bulk_expr_B1 = pd.DataFrame(bulk_expr_B1.transpose(), index=scobj.data_comb.var_names, columns=clus_B1)
-        clus_B2 = ['T' + str(i) for i in clus_B2]
-        bulk_expr_B2 = pd.DataFrame(bulk_expr_B2.transpose(), index=scobj.data_comb.var_names, columns=clus_B2)
-        bulk_expr = pd.DataFrame(bulk_expr.transpose(), index=scobj.data_comb.var_names, columns=clus)
-
+        self.data_comb.obs['SCG_cluster_name'] = pd.concat([self.data_ctrl.obs['SCG_cluster_name'],
+                                                         self.data_treat.obs['SCG_cluster_name']], axis=0)
+    
+        clus_ctrl = np.unique(list(self.data_ctrl.obs['SCG_cluster_name']))
+        clus_treat = np.unique(list(self.data_treat.obs['SCG_cluster_name']))
+        
+        bulk_expr, clus = getClusterExpr(self.data_comb, self.data_comb, key='SCG_cluster_name')
+        bulk_expr = pd.DataFrame(bulk_expr.transpose(), index=self.data_comb.var_names, columns=clus)
+        bulk_expr_hrg = bulk_expr.loc[self.data_comb.var.highly_variable, :]
+        
         k_value = 3
         alpha_value = 5
-        bulk_expr_hrg = bulk_expr.loc[scobj.data_comb.var_names, :]
-        sim2 = getSimilarity(bulk_expr_hrg.transpose(), bulk_expr_hrg.transpose(), k=k_value, alpha=alpha_value)
-        sim_df2 = pd.DataFrame(sim2, index=bulk_expr.columns, columns=bulk_expr.columns)
+        sim = getSimilarity(bulk_expr_hrg.transpose(), bulk_expr_hrg.transpose(), k=k_value, alpha=alpha_value)
+        sim_df = pd.DataFrame(sim, index=bulk_expr_hrg.columns, columns=bulk_expr_hrg.columns)
 
-        cls2cls_dis = 1 - np.array(sim_df2.loc[clus_B1, clus_B2])
-        cls2cls_dis_B1 = 1 - np.array(sim_df2.loc[clus_B1, clus_B1])
-        cls2cls_dis_B2 = 1 - np.array(sim_df2.loc[clus_B2, clus_B2])
-        G2 = getGraph_notdel_dir(cls2cls_dis, cls2cls_dis_B1, cls2cls_dis_B2, align_pre, align_pos)
+        cls2cls_dis = 1 - np.array(sim_df.loc[clus_ctrl, clus_treat])
+        cls2cls_dis_ctrl = 1 - np.array(sim_df.loc[clus_ctrl, clus_ctrl])
+        cls2cls_dis_treat = 1 - np.array(sim_df.loc[clus_treat, clus_treat])
+        G2 = getDiGraph(cls2cls_dis, cls2cls_dis_ctrl, cls2cls_dis_treat, transition_TPM, origin_TPM)
 
         source = []
         target = []
         flow = []
-        prob_pre = []
-        prob_pos = []
-        flow_pre_percent = []
-        flow_pos_percent = []
+        prob_ctrl = []
+        prob_treat = []
+        flow_ctrl_percent = []
+        flow_treat_percent = []
         STC = []
         RAC = []
 
-        for i in range(align_pre.shape[0]):
-            for j in range(align_pre.shape[1]):
-                if (align_pre[i, j] > 0 or align_pos[i, j] > 0):
+        for i in range(transition_TPM.shape[0]):
+            for j in range(transition_TPM.shape[1]):
+                if (transition_TPM[i, j] > 0 or origin_TPM[i, j] > 0):
                     source.append('C' + str(i))
                     target.append('T' + str(j))
                     flow.append('C' + str(i) + '->' + 'T' + str(j))
-                    prob_pre.append(align_pre[i, j])
-                    prob_pos.append(align_pos[i, j])
-                    flow_pre_percent.append(align_pre_mat[i, j])
-                    flow_pos_percent.append(align_pos_mat[i, j])
-                    path = nx.dijkstra_path(G2, source='C_' + str(i), target='T_' + str(j))
-                    weight = nx.dijkstra_path_length(G2, source='C_' + str(i), target='T_' + str(j))
+                    prob_ctrl.append(transition_TPM[i, j])
+                    prob_treat.append(origin_TPM[i, j])
+                    flow_ctrl_percent.append(transition_TPM_mat[i, j])
+                    flow_treat_percent.append(origin_TPM_mat[i, j])
+                    #path = nx.dijkstra_path(G2, source='C' + str(i), target='T' + str(j))
+                    weight = nx.dijkstra_path_length(G2, source='C' + str(i), target='T' + str(j))
                     STC.append(weight)
-                    RAC.append(align_pos_mat_raw[i, j] / align_pre_mat_raw[i, j])
+                    RAC.append(origin_TPM_mat[i, j] / transition_TPM_mat[i, j]  )
 
         flow_info = pd.DataFrame({'Flow': flow,
                                   'Source': source,
                                   'Target': target,
-                                  'Probability of Flow in Control Cluster': prob_pre,
-                                  'Probability of Flow in Gemcitabine-treated Cluster': prob_pos,
-                                  'Percent of Flow in Control Sample': flow_pre_percent,
-                                  'Percent of Flow in Gemcitabine-treated Sample': flow_pos_percent,
+                                  'Probability of Flow in Control Cluster': prob_ctrl,
+                                  'Probability of Flow in Treated Cluster': prob_treat,
+                                  'Percent of Flow in Control Sample': flow_ctrl_percent,
+                                  'Percent of Flow in Treated Sample': flow_treat_percent,
                                   'STC': STC,
                                   'RAC': RAC
                                   })
 
-        print(flow_info)
+        #print(flow_info)
         return flow_info
 
-    def sankey(scobj, weight_qc_mat):
-        align_pre = cls2cls_prob(scobj.data_ctrl, scobj.data_treat, weight_qc_mat, thre_cell=0.05, thre_cls=0.05)
-        weight_mat_t = np.transpose(weight_qc_mat)
-        align_pos = cls2cls_prob(scobj.data_treat, scobj.data_ctrl, weight_mat_t, thre_cell=0.05, thre_cls=0.05)
-        align_pos = np.transpose(align_pos)
-        tmp = rapid_small(align_pre, align_pos)
-        align_pre = tmp[0]
-        align_pos = tmp[1]
-        n_clus = [align_pre.shape[0], align_pre.shape[1]]
-        num1 = Counter(scobj.data_ctrl.obs['LINE_cluster'])
-        n_cells_B1 = [num1[str(i)] for i in range(n_clus[0])]
-        num2 = Counter(scobj.data_treat.obs['LINE_cluster'])
-        n_cells_B2 = [num2[str(i)] for i in range(n_clus[1])]
-        perct_clus_B1 = [n_cells_B1[i] / scobj.data_ctrl.shape[0] for i in range(len(n_cells_B1))]
-        perct_clus_B2 = [n_cells_B2[i] / scobj.data_treat.shape[0] for i in range(len(n_cells_B2))]
-        align_pre_mat = align_pre.copy()
-        align_pos_mat = align_pos.copy()
-        for i in range(n_clus[0]):
-            align_pre_mat[i, :] = perct_clus_B1[i] * align_pre[i, :]
 
-        for j in range(n_clus[1]):
-            align_pos_mat[:, j] = perct_clus_B2[j] * align_pos[:, j]
-        pre_clus_perct1 = np.sum(align_pre_mat, axis=1)
-        pre_clus_perct2 = np.sum(align_pos_mat, axis=1)
-        pos_clus_perct1 = np.sum(align_pre_mat, axis=0)
-        pos_clus_perct2 = np.sum(align_pos_mat, axis=0)
 
-        scobj.data_ctrl.obs['LINE_cluster_name'] = ['C' + str(i) for i in scobj.data_ctrl.obs['LINE_cluster']]
-        scobj.data_treat.obs['LINE_cluster_name'] = ['T' + str(i) for i in scobj.data_treat.obs['LINE_cluster']]
 
-        scobj.data_comb.obs['LINE_cluster'] = pd.concat([scobj.data_ctrl.obs['LINE_cluster_name'],
-                                                         scobj.data_treat.obs['LINE_cluster_name']], axis=0)
-        bulk_expr_B1, clus_B1 = getMetacellExpr(scobj.data_ctrl, scobj.data_comb, key='LINE_cluster')
-        bulk_expr_B2, clus_B2 = getMetacellExpr(scobj.data_treat, scobj.data_comb, key='LINE_cluster')
-        bulk_expr, clus = getMetacellExpr(scobj.data_comb, scobj.data_comb, key='LINE_cluster')
-        clus_B1 = ['C' + str(i) for i in clus_B1]
-        bulk_expr_B1 = pd.DataFrame(bulk_expr_B1.transpose(), index=scobj.data_comb.var_names, columns=clus_B1)
-        clus_B2 = ['T' + str(i) for i in clus_B2]
-        bulk_expr_B2 = pd.DataFrame(bulk_expr_B2.transpose(), index=scobj.data_comb.var_names, columns=clus_B2)
-        bulk_expr = pd.DataFrame(bulk_expr.transpose(), index=scobj.data_comb.var_names, columns=clus)
 
-        k_value = 3
-        alpha_value = 5
-        bulk_expr_hrg = bulk_expr.loc[scobj.data_comb.var_names, :]
-        sim2 = getSimilarity(bulk_expr_hrg.transpose(), bulk_expr_hrg.transpose(), k=k_value, alpha=alpha_value)
-        sim_df2 = pd.DataFrame(sim2, index=bulk_expr.columns, columns=bulk_expr.columns)
 
-        cls2cls_dis = 1 - np.array(sim_df2.loc[clus_B1, clus_B2])
-        cls2cls_dis_B1 = 1 - np.array(sim_df2.loc[clus_B1, clus_B1])
-        cls2cls_dis_B2 = 1 - np.array(sim_df2.loc[clus_B2, clus_B2])
-        G2 = getGraph_notdel_dir(cls2cls_dis, cls2cls_dis_B1, cls2cls_dis_B2, align_pre, align_pos)
-
-        source = []
-        target = []
-        flow = []
-        flow_pre_percent = []
-        flow_pos_percent = []
-        STC = []
-        pre_sum = []
-        pos_sum = []
-
-        for i in range(align_pre.shape[0]):
-            for j in range(align_pre.shape[1]):
-                if (align_pre[i, j] > 0 or align_pos[i, j] > 0):
-                    source.append(i)
-                    target.append(j)
-                    flow_pre_percent.append(align_pre_mat[i, j])
-                    flow_pos_percent.append(align_pos_mat[i, j])
-                    weight = nx.dijkstra_path_length(G2, source='C_' + str(i), target='T_' + str(j))
-                    STC.append(weight)
-
-        p_df = pd.DataFrame({
-            'c': source,
-            't': target,
-            'c_p': flow_pre_percent,
-            't_p': flow_pos_percent,
-            'STC': STC
-        })
-        pre_fractions = p_df[p_df['c'].isin(range(n_clus[0]))].groupby('c')['c_p'].sum().values
-        pos_fractions = p_df[p_df['t'].isin(range(n_clus[1]))].groupby('t')['t_p'].sum().values
-        fig = plt.figure(figsize=(4, 4))
-        gs = GridSpec(p_df.shape[0], 2, width_ratios=[2.1, 1], hspace=0.1, wspace=0.7)
-        ax = fig.add_subplot(gs[0:p_df.shape[0], 0])
-
-        dist_cmap = cm.get_cmap('viridis')
-        dist_range = max(p_df['STC']) - min(p_df['STC'])
-        smap = cm.ScalarMappable(cmap=dist_cmap)
-        smap.set_array(p_df['STC'])
+    def sankey(self, DrugResponseInfo):
+        transition_TPM = self.transition_TPM
+        origin_TPM = self.origin_TPM
+        
+        n_clus = [transition_TPM.shape[0], transition_TPM.shape[1]]
+        
+        num1 = Counter(self.data_ctrl.obs['SCG_cluster'])
+        n_cells_ctrl = [num1[str(i)] for i in range(n_clus[0])]
+        num2 = Counter(self.data_treat.obs['SCG_cluster'])
+        n_cells_treat = [num2[str(i)] for i in range(n_clus[1])]
+        
+        perct_clus_ctrl = [n_cells_ctrl[i] / self.data_ctrl.shape[0] for i in range(len(n_cells_ctrl))]
+        perct_clus_treat = [n_cells_treat[i] / self.data_treat.shape[0] for i in range(len(n_cells_treat))]
+        
+        ctrl_fractions = perct_clus_ctrl
+        treat_fractions = perct_clus_treat
+        fig = plt.figure(figsize=(6, 6))
+        gs = GridSpec(DrugResponseInfo.shape[0], 2, width_ratios=[2.1, 1], hspace=0.1, wspace=0.7)
+        ax = fig.add_subplot(gs[0:DrugResponseInfo.shape[0], 0])
 
         for i in range(n_clus[0]):
-            bottom = pre_fractions[(i + 1):].sum()
-            rectangle = ax.bar(x=[0], height=pre_fractions[i], bottom=bottom, color=scobj.pre_colors[i],
+            bottom = np.sum(ctrl_fractions[(i + 1):])
+            rectangle = ax.bar(x=[0], height=ctrl_fractions[i], bottom=bottom, color=self.ctrl_colors[i],
                                edgecolor='black', fill=True, linewidth=0.7, width=0.16)
-            text_y = rectangle[0].get_height() / 2 + bottom
-            # ax.text(x=1.16, y=text_y, s='Ctrl'+str(i), color=scobj.pre_colors[i],
-            # horizontalalignment='left', verticalalignment='center', fontsize=13)
+            text_y =bottom + ctrl_fractions[i] / 2
+            ax.text(x=0, y=text_y, s=f'C{i}', color='black',  
+            ha='center', va='center', fontsize=10)  
 
         for i in range(n_clus[1]):
-            bottom = pos_fractions[(i + 1):].sum()
-            rectangle = ax.bar(x=[1], height=pos_fractions[i], bottom=bottom, color=scobj.pos_colors[i],
+            bottom =np.sum(treat_fractions[(i + 1):])
+            rectangle = ax.bar(x=[1], height=treat_fractions[i], bottom=bottom, color=self.treat_colors[i],
                                edgecolor='black', fill=True, linewidth=0.7, width=0.16)
-            text_y = rectangle[0].get_height() / 2 + bottom
-            # ax.text(x=1.26, y=text_y, s='Treat'+str(i), color=scobj.pos_colors[i],
-            # horizontalalignment='left', verticalalignment='center', fontsize=13)
+            text_y =bottom + treat_fractions[i] / 2
+            ax.text(x=1, y=text_y, s=f'T{i}', color='black',  
+            ha='center', va='center', fontsize=10)  
 
-        legend_labels_pre = [f"Ctrl{i}" for i in range(n_clus[0])]
-        legend_handles_pre = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in scobj.pre_colors]
 
-        legend_labels_pos = [f"Treat{i}" for i in range(n_clus[1])]
-        legend_handles_pos = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in scobj.pos_colors]
+#         legend_labels_ctrl = [f"Ctrl{i}" for i in range(n_clus[0])]
+#         legend_handles_ctrl = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in self.ctrl_colors]
 
-        all_legend_labels = legend_labels_pre + legend_labels_pos
-        all_legend_handles = legend_handles_pre + legend_handles_pos
+#         legend_labels_treat = [f"Treat{i}" for i in range(n_clus[1])]
+#         legend_handles_treat = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in self.treat_colors]
 
-        fig.tight_layout()
-        ax.legend(all_legend_handles, all_legend_labels, loc='upper left', bbox_to_anchor=(1, 1), ncol=1)
+#         all_legend_labels = legend_labels_ctrl + legend_labels_treat
+#         all_legend_handles = legend_handles_ctrl + legend_handles_treat
+
+#         fig.tight_layout()
+#         ax.legend(all_legend_handles, all_legend_labels, loc='center left', bbox_to_anchor=(1, 0.5), ncol=2)
 
         for pos in ['right', 'top', 'bottom', 'left']:
             ax.spines[pos].set_visible(False)
@@ -867,23 +970,25 @@ class scConGraph:
         xs *= 0.83
         xs += 0.085
 
-        y_start_record = [1 - pre_fractions[0:ii].sum() for ii in range(len(pre_fractions))]
-        y_end_record = [1 - pos_fractions[0:ii].sum() for ii in range(len(pos_fractions))]
+        y_start_record = [1 - np.sum(ctrl_fractions[0:ii]) for ii in range(len(ctrl_fractions))]
+        y_end_record = [1 - np.sum(treat_fractions[0:ii]) for ii in range(len(treat_fractions))]
+        
 
         y_up_start, y_dw_start = 1, 1
         y_up_end, y_dw_end = 1, 1
         axi = 0
         for si in range(n_clus[0]):
-            cur_p_df = p_df.loc[p_df['c'] == si, :]
+            cur_p_df = DrugResponseInfo.loc[DrugResponseInfo['Source'] ==  'C'+str(si), :]
             if cur_p_df.shape[0] > 0:
                 for fi in range(cur_p_df.shape[0]):
                     y_up_start = y_start_record[si]
-                    y_dw_start = y_up_start - cur_p_df['c_p'].iloc[fi]
+                    y_dw_start = y_up_start - cur_p_df['Percent of Flow in Control Sample'].iloc[fi]
                     y_start_record[si] = y_dw_start
 
-                    ti = cur_p_df['t'].iloc[fi]
+                    ti = cur_p_df['Target'].iloc[fi]
+                    ti = int(ti[1:])
                     y_up_end = y_end_record[ti]
-                    y_dw_end = y_up_end - cur_p_df['t_p'].iloc[fi]
+                    y_dw_end = y_up_end - cur_p_df['Percent of Flow in Treated Sample'].iloc[fi]
                     y_end_record[ti] = y_dw_end
 
                     y_up_start -= 0.003
@@ -894,7 +999,7 @@ class scConGraph:
                     ys_up = y_up_start + (y_up_end - y_up_start) * ys
                     ys_dw = y_dw_start + (y_dw_end - y_dw_start) * ys
 
-                    color_s_t = [scobj.pre_colors[si], scobj.pos_colors[ti]]
+                    color_s_t = [self.ctrl_colors[si], self.treat_colors[ti]]
                     cmap = LinearSegmentedColormap.from_list('mycmap', [color_s_t[0], color_s_t[1]])
                     grad_colors = cmap(np.linspace(0, 1, len(xs) - 1))
                     grad_colors = [rgb2hex(color) for color in grad_colors]
@@ -902,4 +1007,108 @@ class scConGraph:
                         ax.fill_between(xs[pi:(pi + 2)], ys_dw[pi:(pi + 2)], ys_up[pi:(pi + 2)], alpha=0.7,
                                         color=grad_colors[pi], edgecolor=None)
 
+
+                        
+                        
+                        
+    def sankey_TGI(self, DrugResponseInfo, TGI):
+        frac = 1-TGI
+        transition_TPM = self.transition_TPM
+        origin_TPM = self.origin_TPM
+        
+        n_clus = [transition_TPM.shape[0], transition_TPM.shape[1]]
+        
+        num1 = Counter(self.data_ctrl.obs['SCG_cluster'])
+        n_cells_ctrl = [num1[str(i)] for i in range(n_clus[0])]
+        num2 = Counter(self.data_treat.obs['SCG_cluster'])
+        n_cells_treat = [num2[str(i)] for i in range(n_clus[1])]
+        
+        perct_clus_ctrl = [n_cells_ctrl[i] / self.data_ctrl.shape[0] for i in range(len(n_cells_ctrl))]
+        perct_clus_treat = [n_cells_treat[i] / self.data_treat.shape[0] for i in range(len(n_cells_treat))]
+        
+        ctrl_fractions = perct_clus_ctrl
+        treat_fractions = perct_clus_treat
+        fig = plt.figure(figsize=(6, 6))
+        gs = GridSpec(DrugResponseInfo.shape[0], 2, width_ratios=[2.1, 1], hspace=0.1, wspace=0.7)
+        ax = fig.add_subplot(gs[0:DrugResponseInfo.shape[0], 0])
+
+        for i in range(n_clus[0]):
+            bottom = np.sum(ctrl_fractions[(i + 1):])
+            rectangle = ax.bar(x=[0], height=ctrl_fractions[i], bottom=bottom, color=self.ctrl_colors[i],
+                               edgecolor='black', fill=True, linewidth=0.7, width=0.16)
+            text_y =bottom + ctrl_fractions[i] / 2
+            ax.text(x=0, y=text_y, s=f'C{i}', color='black',  
+            ha='center', va='center', fontsize=10)  
+
+        for i in range(n_clus[1]):
+            bottom =np.sum(treat_fractions[(i + 1):])*frac
+            rectangle = ax.bar(x=[1], height=treat_fractions[i]*frac, bottom=bottom, color=self.treat_colors[i],
+                               edgecolor='black', fill=True, linewidth=0.7, width=0.16)
+            text_y =bottom + treat_fractions[i]*frac / 2
+            ax.text(x=1, y=text_y, s=f'T{i}', color='black',  
+            ha='center', va='center', fontsize=10)  
+
+
+#         legend_labels_ctrl = [f"Ctrl{i}" for i in range(n_clus[0])]
+#         legend_handles_ctrl = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in self.ctrl_colors]
+
+#         legend_labels_treat = [f"Treat{i}" for i in range(n_clus[1])]
+#         legend_handles_treat = [Rectangle((0, 0), 1, 1, color=color, ec='black') for color in self.treat_colors]
+
+#         all_legend_labels = legend_labels_ctrl + legend_labels_treat
+#         all_legend_handles = legend_handles_ctrl + legend_handles_treat
+
+#         fig.tight_layout()
+#         ax.legend(all_legend_handles, all_legend_labels, loc='center left', bbox_to_anchor=(1, 0.5), ncol=2)
+
+        for pos in ['right', 'top', 'bottom', 'left']:
+            ax.spines[pos].set_visible(False)
+        ax.xaxis.set_visible(False)
+        ax.yaxis.set_visible(False)
+        ax.set_xlabel(None)
+        ax.set_ylabel(None)
+        ax.text(x=0, y=-0.07, s='Ctrl', horizontalalignment='center', verticalalignment='center', fontsize=13)
+        ax.text(x=1, y=-0.07, s='Treat', horizontalalignment='center', verticalalignment='center', fontsize=13)
+
+        xs = np.linspace(-5, 5, num=100)
+        ys = np.array([sigmoid(x) for x in xs])
+        xs = xs / 10 + 0.5
+        xs *= 0.83
+        xs += 0.085
+
+        y_start_record = [1 - np.sum(ctrl_fractions[0:ii]) for ii in range(len(ctrl_fractions))]
+        y_end_record = [(1 - np.sum(treat_fractions[0:ii]))*frac  for ii in range(len(treat_fractions))]
+        
+        y_up_start, y_dw_start = 1, 1
+        y_up_end, y_dw_end = 1, 1
+        axi = 0
+        for si in range(n_clus[0]):
+            cur_p_df = DrugResponseInfo.loc[DrugResponseInfo['Source'] ==  'C'+str(si), :]
+            if cur_p_df.shape[0] > 0:
+                for fi in range(cur_p_df.shape[0]):
+                    y_up_start = y_start_record[si]
+                    y_dw_start = y_up_start - cur_p_df['Percent of Flow in Control Sample'].iloc[fi]
+                    y_start_record[si] = y_dw_start
+
+                    ti = cur_p_df['Target'].iloc[fi]
+                    ti = int(ti[1:])
+                    y_up_end = y_end_record[ti]
+                    y_dw_end = y_up_end - frac * cur_p_df['Percent of Flow in Treated Sample'].iloc[fi]
+                    y_end_record[ti] = y_dw_end
+
+                    y_up_start -= 0.000003
+                    y_dw_start += 0.000004
+                    y_up_end -= 0.000003
+                    y_dw_end += 0.000004
+
+                    ys_up = y_up_start + (y_up_end - y_up_start) * ys
+                    ys_dw = y_dw_start + (y_dw_end - y_dw_start) * ys
+
+                    color_s_t = [self.ctrl_colors[si], self.treat_colors[ti]]
+                    cmap = LinearSegmentedColormap.from_list('mycmap', [color_s_t[0], color_s_t[1]])
+                    grad_colors = cmap(np.linspace(0, 1, len(xs) - 1))
+                    grad_colors = [rgb2hex(color) for color in grad_colors]
+                    for pi in range(len(xs) - 1):
+                        ax.fill_between(xs[pi:(pi + 2)], ys_dw[pi:(pi + 2)], ys_up[pi:(pi + 2)], alpha=0.7,
+                                        color=grad_colors[pi], edgecolor=None)
 
