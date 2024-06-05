@@ -1,0 +1,25 @@
+﻿Control Cluster,Aligned Clusters (non-acquired),RDR score,ADR score,Drug response type
+P1_C0,"P1_G0, P1_G2",0.776323636,0.202542837,Sensitivity
+P1_C2,"P1_G0, P1_G2",2.574238209,0.671618749,Relatively Intrinsic Resistance
+P1_C3,P1_G1,5.070346107,1.322853299,Absolutely Intrinsic Resistance
+P1_C4,P1_G4,2.782163508,0.725866459,Relatively Intrinsic Resistance
+P2_C0,P2_G1,0.440679847,0.160892212,Sensitivity
+P2_C1,P2_G0,1.322026031,0.482671704,Relatively Intrinsic Resistance
+P2_C6,P2_G4,3.32328224,1.213330346,Absolutely Intrinsic Resistance
+P3_C0,P3_G0,1.119106421,0.675604546,Relatively Intrinsic Resistance
+P3_C1,P3_G1,0.543784578,0.32828275,Sensitivity
+P3_C2,P3_G2,1.363368941,0.82306583,Relatively Intrinsic Resistance
+P3_C3,P3_G3,0.588264704,0.355135402,Sensitivity
+P4_C1,"P4_G0, P4_G2",2.43286549,1.181642769,Absolutely Intrinsic Resistance
+P4_C2,P4_G1,1.020335762,0.49557708,Relatively Intrinsic Resistance
+P4_C3,P4_G3,0.455193271,0.221087372,Sensitivity
+P5_C0,P5_G0,1.296631522,0.289797145,Relatively Intrinsic Resistance
+P5_C1,P5_G3,0.537133678,0.120049377,Sensitivity
+P5_C2,"P5_G1, P5_G4",0.998935209,0.223262019,Relatively Intrinsic Resistance
+P5_C3,P5_G4,0.630417511,0.140898314,Sensitivity
+P5_C4,P5_G2,0.989694597,0.221196743,Relatively Intrinsic Resistance
+P5_C6,P5_G5,2.0818546,0.465294503,Relatively Intrinsic Resistance
+P6_C0,P6_G1,0.823262949,0.161606517,Sensitivity
+P6_C1,P6_G0,1.744198297,0.342386126,Relatively Intrinsic Resistance
+P6_C2,P6_G2,0.707359046,0.138854581,Sensitivity
+P6_C3,P6_G3,0.848278126,0.166516996,Sensitivity
