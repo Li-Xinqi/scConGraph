@@ -501,7 +501,7 @@ colnames(TCGA_survival.df) <- c('sample', 'OS_STATUS', 'Patient', 'OS_DAYS')
 TCGA_survival.df$OS_MONTHS <- round(TCGA_survival.df$OS_DAYS / 30, 4)
 
 
-# Figure 3d
+# Figure 3D
 pathway.sel <- 'Stemness'
 
 # downloaded form http://dibresources.jcbose.ac.in/ssaha4/bcscdb/search.php
@@ -685,7 +685,7 @@ p.surv$plot <- p.surv$plot +
 print(p.surv)
 
 #----------------------------------------------------------------------------#
-# Figure 3e
+# Figure 3E
 gmt <- read.gmt("c5.go.bp.v2022.1.Hs.symbols.gmt")
 
 pathway.sel <- 'GOBP_NEGATIVE_REGULATION_OF_INTRINSIC_APOPTOTIC_SIGNALING_PATHWAY'
@@ -791,7 +791,7 @@ p.surv$plot <- p.surv$plot +
 print(p.surv)
 
 #----------------------------------------------------------------------------#
-# Figure 3f
+# Figure 3F
 gmt <- read.gmt("c5.go.bp.v2022.1.Hs.symbols.gmt")
 
 pathway.sel <-'GOBP_RESPONSE_TO_ENDOPLASMIC_RETICULUM_STRESS'
@@ -903,7 +903,7 @@ print(p.surv)
 
 
 #----------------------------------------------------------------------------#
-# Supp Figure 5c-e
+# Supp Figure 5C-E
 gmt <- read.gmt("h.all.v2022.1.Hs.symbols.gmt")
 
 # pathways used to show
