@@ -292,7 +292,7 @@ table(markers$Type)
 
 
 # Venn plots
-markers.all <- read.csv( '/home/glab/lxq/PDAC_writing/github/Mateiral/Intrinsic_resistance_compare_3groups_wilcox_test.csv', 
+markers.all <- read.csv( 'Intrinsic_resistance_compare_3groups_wilcox_test.csv', 
                          row.names = 1, check.names=F)
 markers.all$Patient <- substr(markers.all$Type, 1, 2)
 markers.all$Group <- substr(markers.all$Type, 4, 15 )
@@ -506,7 +506,7 @@ pathway.sel <- 'Stemness'
 
 # downloaded form http://dibresources.jcbose.ac.in/ssaha4/bcscdb/search.php
 # https://academic.oup.com/database/article/doi/10.1093/database/baac082/6725752
-stemness.df <- read.csv('/home/glab/lxq/reference/CSC_Biomarker_2022_All.csv', check.names = F, header = F)
+stemness.df <- read.csv('CSC_Biomarker_2022_All.csv', check.names = F, header = F)
 
 
 colnames(stemness.df) <- c('Gene', 'TM', 'Direction', 'HGNC_ID', 'Disease', 'Disease_Type', 'Cell_Line', 'Drug', 'Method',
@@ -686,7 +686,7 @@ print(p.surv)
 
 #----------------------------------------------------------------------------#
 # Figure 3e
-gmt <- read.gmt("/home/glab/lxq/reference/c5.go.bp.v2022.1.Hs.symbols.gmt")
+gmt <- read.gmt("c5.go.bp.v2022.1.Hs.symbols.gmt")
 
 pathway.sel <- 'GOBP_NEGATIVE_REGULATION_OF_INTRINSIC_APOPTOTIC_SIGNALING_PATHWAY'
 genes.path <- gmt$gene[which(gmt$term == pathway.sel)]
@@ -792,7 +792,7 @@ print(p.surv)
 
 #----------------------------------------------------------------------------#
 # Figure 3f
-gmt <- read.gmt("/home/glab/lxq/reference/c5.go.bp.v2022.1.Hs.symbols.gmt")
+gmt <- read.gmt("c5.go.bp.v2022.1.Hs.symbols.gmt")
 
 pathway.sel <-'GOBP_RESPONSE_TO_ENDOPLASMIC_RETICULUM_STRESS'
 genes.path <- gmt$gene[which(gmt$term == pathway.sel)]
@@ -904,7 +904,7 @@ print(p.surv)
 
 #----------------------------------------------------------------------------#
 # Supp Figure 5c-e
-gmt <- read.gmt("/home/glab/lxq/reference/h.all.v2022.1.Hs.symbols.gmt")
+gmt <- read.gmt("h.all.v2022.1.Hs.symbols.gmt")
 
 # pathways used to show
 pathway.sel <-'HALLMARK_ADIPOGENESIS'
