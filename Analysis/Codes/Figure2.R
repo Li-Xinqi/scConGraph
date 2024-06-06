@@ -7,8 +7,8 @@ library(car)
 library(ggsci)
 
 
-setwd('F:/PDAC_writing/github/upload/')
-flow.meta <- read.csv("F:/PDAC_writing/github/upload/Flow_information.csv", header = T, check.names = F)
+setwd('./Analysis/Data/')
+flow.meta <- read.csv("Flow_information.csv", header = T, check.names = F)
 colnames(flow.meta) <- c("Flow", "Sample", "Source", 
                          "Target", "Probability_of_Flow_in_Control_Cluster",  "Probability_of_Flow_in_Treated_Cluster", 
                          "Percent_of_Flow_in_Control_Sample", "Percent_of_Flow_in_Treated_Sample", 
