@@ -48,12 +48,8 @@ for (i in 1:nrow(flow.meta)){
   markers <- rbind(markers, markers.sub)
 }
 
-markers$Flow <- paste0(markers$Compare, '->', markers$Cluster)
-table(markers$Flow)
-
 markers$Flow <-  paste0(substr(markers$Cluster, 1, 2), ': ', substr(markers$Compare, 4, 5), '->', substr(markers$Cluster, 4, 5))
 #write.csv(markers, './Figure4/Flow_Acquired_Resistance_DEGs_LogFC0_Pct10.csv', row.names = F)
-markers <- markers[which(markers$Flow %in% flow.meta$Flow[flow.meta$Drug_Response_Type == 'Acquired Resistance'] & markers$p_val_adj < 0.05), ]
 
 
 # Log2FC value matrix for acquired resistant flows
@@ -78,10 +74,8 @@ for (clus in colnames(bulk)){
 bulk.use <- bulk[genes_use, ]
 dim(bulk.use)
 
-#write.csv(bulk.use, './Figure4/Acquired_Resistance_markers_bulk_logFC_matrix.csv')
 
 # Create Seurat object for flows of acquired resistance
-bulk.use <- read.csv( './Figure4/Acquired_markers_bulk_logFC_matrix.csv', row.names = 1, check.names = F)
 cluster_bulk <- CreateSeuratObject(counts = bulk.use , project = "cluster", min.cells = 1)
 dim(cluster_bulk)
 
@@ -307,7 +301,7 @@ GSEA_results$Flow <- colnames(bulk.use)[1]
 for (i in 2:ncol(bulk.use)){
   geneList<- bulk.use[, i] 
   names(geneList) <- rownames(bulk.use)
-  geneList <- sort(geneList, decreasing = T) #从高到低排序
+  geneList <- sort(geneList, decreasing = T) 
   GSEA_tmp <- GSEA(geneList, TERM2GENE = gmt, pvalueCutoff = 1) #GSEA分析
   GSEA_tmp <- as.data.frame( GSEA_tmp)
   GSEA_tmp$Flow <- colnames(bulk.use)[i]
@@ -319,15 +313,15 @@ write.csv(GSEA_results, './Data/Figure4/Acquired_Resistance_GSEA_HALLMARK.csv')
 gmt <- read.gmt("c2.cp.kegg.v2022.1.Hs.symbols.gmt")
 geneList<- bulk.use[, 1] 
 names(geneList) <- rownames(bulk.use)
-geneList <- sort(geneList, decreasing = T) #从高到低排序
-GSEA_results <- GSEA(geneList, TERM2GENE = gmt, pvalueCutoff = 1) #GSEA分析
+geneList <- sort(geneList, decreasing = T) 
+GSEA_results <- GSEA(geneList, TERM2GENE = gmt, pvalueCutoff = 1) #GSEA
 GSEA_results <- as.data.frame(GSEA_results)
 GSEA_results$Flow <- colnames(bulk.use)[1]
 for (i in 2:ncol(bulk.use)){
   geneList<- bulk.use[, i] 
   names(geneList) <- rownames(bulk.use)
-  geneList <- sort(geneList, decreasing = T) #从高到低排序
-  GSEA_tmp <- GSEA(geneList, TERM2GENE = gmt, pvalueCutoff = 1) #GSEA分析
+  geneList <- sort(geneList, decreasing = T) 
+  GSEA_tmp <- GSEA(geneList, TERM2GENE = gmt, pvalueCutoff = 1) #GSEA
   GSEA_tmp <- as.data.frame( GSEA_tmp)
   GSEA_tmp$Flow <- colnames(bulk.use)[i]
   GSEA_results <- rbind( GSEA_results,  GSEA_tmp)
@@ -723,7 +717,7 @@ g2 <- g + geom_vline(data = maxima1,
     strip.text = element_text(size=16),
     axis.ticks.x=element_line(colour="black", linewidth = 1),
     axis.ticks.y=element_line(colour="black", linewidth = 1),
-    axis.ticks=element_line(#坐标轴刻度线的设置
+    axis.ticks=element_line(
       colour="red",
       size=.5,
       linetype=1,
@@ -909,7 +903,7 @@ p.surv.tcga$plot <- p.surv.tcga$plot +
     strip.text = element_text(size=14),
     axis.ticks.x=element_line(colour="black", linewidth = 1),
     axis.ticks.y=element_line(colour="black", linewidth = 1),
-    axis.ticks=element_line(#坐标轴刻度线的设置
+    axis.ticks=element_line(
       colour="red",
       size=.5,
       linetype=1))
