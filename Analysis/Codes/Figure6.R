@@ -7,6 +7,7 @@ library(ggrepel)
 library(pheatmap)
 library(ggpubr)
 
+setwd('./Analysis/')
 
 # Figure 6B
 expr.data <- read.table('./Data/Figure6/expr_counts_final.txt',
