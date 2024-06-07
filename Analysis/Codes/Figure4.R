@@ -214,8 +214,8 @@ genes.dot.df <- data.frame(Gene = rownames(cluster_bulk),
 )
 head(genes.dot.df)
 
-#write.csv(genes.dot.df, 'Genes_mean_percent.csv')
-genes.dot.df <- read.csv( 'Genes_mean_percent.csv', row.names = 1, header = T, check.names = F)
+#write.csv(genes.dot.df, 'Acquired_Resistance_Genes_mean_percent.csv')
+genes.dot.df <- read.csv( 'Acquired_Resistance_Genes_mean_percent.csv', row.names = 1, header = T, check.names = F)
 genes_use1 <- c(
   # Quiescence
   'CDKN1A', 'TP53INP2', 'PLAUR', 'PIM1', 'IRS2', 'ADM', 'VEGFA', 'PDGFA', 'TJP1', 'CLDN7', 'F11R'
