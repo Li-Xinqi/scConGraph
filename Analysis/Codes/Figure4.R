@@ -52,8 +52,8 @@ markers$Flow <- paste0(markers$Compare, '->', markers$Cluster)
 table(markers$Flow)
 
 markers$Flow <-  paste0(substr(markers$Cluster, 1, 2), ': ', substr(markers$Compare, 4, 5), '->', substr(markers$Cluster, 4, 5))
-markers <- markers[which(markers$Flow %in% flow.meta$Flow[flow.meta$Drug_Response_Type == 'Acquired Resistance'] & markers$p_val_adj < 0.05), ]
 #write.csv(markers, './Figure4/Flow_Acquired_Resistance_DEGs_LogFC0_Pct10.csv', row.names = F)
+markers <- markers[which(markers$Flow %in% flow.meta$Flow[flow.meta$Drug_Response_Type == 'Acquired Resistance'] & markers$p_val_adj < 0.05), ]
 
 
 # Log2FC value matrix for acquired resistant flows
