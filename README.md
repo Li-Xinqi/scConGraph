@@ -22,4 +22,4 @@ The vignette of `scConGraph` can be found in the project [wiki](https://github.c
 
 ## Codes for Drug Response Analysis
 The R scripts used for analyzing drug responses are located in the Analysis/Codes folder. The raw and intermediate data are stored in the Analysis/Data folder. Larger datasets are saved on the [cloud](https://cloud.tsinghua.edu.cn/d/63ff224544874971b0dd/).  
-If you have any questions about the codes, please contact the author at lxq19@mails.tsinghua.edu.cn.
+If you have any questions about the codes, please contact the [author](lxq19@mails.tsinghua.edu.cn).
