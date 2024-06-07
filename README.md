@@ -6,7 +6,9 @@ scConGraph is a scalable bi-layer graph model that efficiently **integrates cros
 </p>
 
 ## System requirements
-scConGraph is now available for Linux, with a Windows version planned for recent release. scConGraph requires only a standard computer with enough RAM to perform in-memory computations.
+scConGraph is currently **only available for Linux systems** because the embedding method we use, LINE, is implemented for Linux. A Windows version is planned for release soon. However, if you only need to use the scConGraph visualization methods, which are implemented in Python, there are no system restrictions.
+
+
 
 ## Installation
 CINEMA-OT requires `python` version 3.7+.  Install directly from pip with:
