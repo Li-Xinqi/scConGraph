@@ -33,7 +33,27 @@ smp <- readRDS('./Data/Combine_PDAC_Seurat_Object.RDS')
 
 # Average expression of control and treated clusters for PDAC flows
 markers <- read.csv( './Data/Figure4/Flow_Acquired_Resistance_DEGs_LogFC0_Pct10.csv')
+genes_use <- unique(markers$Gene)
+length(genes_use)
 
+bulk <- matrix(0, nrow = nrow(smp), ncol = length(unique(markers$Flow)))
+rownames(bulk) <- rownames(smp)
+colnames(bulk) <- unique(markers$Flow)
+for (clus in colnames(bulk)){
+  print(clus)
+  compare.1 <- paste0(substr(clus, 1, 2),  '_', substr(clus, 5, 6))
+  compare.2 <- paste0(substr(clus, 1, 2),  '_', substr(clus, 9, 10))
+  bulk.1 <- smp@assays$RNA@data[, which(smp$Clusters %in% compare.1)]
+  bulk.2 <- smp@assays$RNA@data[, which(smp$Clusters %in% compare.2)]
+  bulk.delta <- log2(rowMeans(expm1(bulk.2))+1) - log2(rowMeans(expm1(bulk.1))+1)
+  bulk[names(bulk.delta),clus] <- bulk.delta
+}
+bulk.use <- bulk[genes_use, ]
+dim(bulk.use)
+# write.csv(bulk.use, 'Acquired_Resistance_markers_bulk_logFC_matrix.csv')
+
+
+# Average expression of control and treated clusters for PDAC flows
 pre.mat <- matrix(0, nrow = nrow(smp), ncol = length(unique(markers$Flow)))
 pos.mat <- matrix(0, nrow = nrow(smp), ncol = length(unique(markers$Flow)))
 
