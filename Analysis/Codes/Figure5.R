@@ -31,11 +31,11 @@ smp <- readRDS('./Data/Combine_PDAC_Seurat_Object.RDS')
 #------------------------------------------------------------------------------------------#
 # Figure 5A, Genes ranked by average log2FC between gemcitabine-treated and control conditions across quiescence pattern flows
 
-# Average expression of control and treated clusters for PDAC flows
 markers <- read.csv( './Data/Figure4/Flow_Acquired_Resistance_DEGs_LogFC0_Pct10.csv')
 genes_use <- unique(markers$Gene)
 length(genes_use)
 
+# Average log2FC for flows
 bulk <- matrix(0, nrow = nrow(smp), ncol = length(unique(markers$Flow)))
 rownames(bulk) <- rownames(smp)
 colnames(bulk) <- unique(markers$Flow)
