@@ -6,7 +6,7 @@ scConGraph is a scalable bi-layer graph model that efficiently **integrates cros
 </p>
 
 ## System requirements
-scConGraph is currently **only available for Linux systems** because the embedding method we use, LINE, is implemented for Linux. A Windows version is planned for release soon. However, if you only need to use the scConGraph visualization methods, which are implemented in Python, there are no system restrictions.
+scConGraph is currently ** available for Linux systems** because the embedding method we use, LINE, is implemented for Linux. If you use the visualization methods in scConGraph, which are implemented in Python, there are no system restrictions.
 
 
 
