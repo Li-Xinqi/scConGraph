@@ -106,14 +106,17 @@ def runScanpyProcess(scobj, n_top_genes = 2000, regress_out_variables = ['nCount
     - The choice of variables to regress out can significantly impact downstream analysis and should be considered carefully.
     '''
     sc.pp.highly_variable_genes(scobj, n_top_genes = n_top_genes)
+    scobj.raw = scobj
+    scobj = scobj[:, scobj.var.highly_variable]
+
     if regress_out_variables is not None:
         sc.pp.regress_out(scobj, regress_out_variables)
-    sc.pp.scale(scobj, max_value=10)
+    sc.pp.scale(scobj)
 
     sc.tl.pca(scobj, svd_solver='arpack')
     if harmony:
         sce.pp.harmony_integrate(scobj,  condition)
-        scobj.obsm['X_pca'] = scobj.obsm['X_pca_harmony']
+        scobj.obsm['X_pca'] = scobj.obsm['X_pca_harmony'].copy()
         
     sc.pp.neighbors(scobj, n_neighbors=10, n_pcs=n_pcs)
     sc.tl.umap(scobj)
@@ -176,7 +179,7 @@ def getSimilarity(PC_data1, PC_data2, k, alpha):
 
 
 
-def runLINE(path, edges, output, order=1, size=100, negative=5, samples=500):
+def runLINE(path, edges, output, order=1, size=100, negative=5, samples=500, threads = 20):
     '''
     Runs the LINE (Large-scale Information Network Embedding) algorithm to generate embeddings.
 
@@ -206,7 +209,7 @@ def runLINE(path, edges, output, order=1, size=100, negative=5, samples=500):
         '-order', str(order),
         '-negative', str(negative),
         '-samples', str(samples),
-        '-threads', '20'
+        '-threads', str(threads) # 20 in previous version
     ]
     print('Command line - Run LINE:', ' '.join(cmd))
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -383,7 +386,7 @@ def cls2cls_prob(data_ctrl, data_treat, weight_df, thre_cell=0.05, thre_cls=0.05
     return cls2cls
 
 
-def rapid_QC(transition_TPM, origin_TPM):
+def rapid_QC(transition_TPM, origin_TPM, threshold = 0.1):
     '''
     Perform a rapid quality control (QC) check on transition and origin probability matrices to ensure
     that low-probability transitions are filtered out, improving the interpretability and reliability of
@@ -407,7 +410,7 @@ def rapid_QC(transition_TPM, origin_TPM):
     n_clus = transition_TPM.shape
     for i in range(n_clus[0]):
         for j in range(n_clus[1]):
-            if transition_TPM[i, j] + origin_TPM[i, j] < 0.1:
+            if transition_TPM[i, j] + origin_TPM[i, j] < threshold:
                 transition_TPM[i, j] = 0
                 origin_TPM[i, j] = 0
                 transition_TPM = normalize(transition_TPM, norm='l1', axis=1)
@@ -502,8 +505,13 @@ def plotScore(data, title, ax, score_type =  'silhouette_score', show_legend=Fal
         b = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_single) for i in umap])
         c = np.array([metrics.davies_bouldin_score(data.obsm[i], cluster_SCG) for i in umap])
         #print(a, b, c)
+    elif score_type == 'calinski_harabasz_score':
+        a = np.array([metrics.calinski_harabasz_score(data.obsm[i], cluster_comb) for i in umap])
+        b = np.array([metrics.calinski_harabasz_score(data.obsm[i], cluster_single) for i in umap])
+        c = np.array([metrics.calinski_harabasz_score(data.obsm[i], cluster_SCG) for i in umap])
+        #print(a, b, c)
     else:
-        print("Invalid score_type. Please choose 'silhouette_score' or 'davies_bouldin_score'.")
+        print("Invalid score_type. Please choose 'silhouette_score', 'calinski_harabasz_score' or 'davies_bouldin_score'.")
         return None  # 返回None或适当的默认值
     score_df = pd.DataFrame([a, b, c], columns =umap, index = ['leiden_comb', 'leiden_single', 'SCG_cluster'])
     
@@ -697,8 +705,8 @@ def evaluateCertainty(P):
 
 
 
-def assignFlowType(DrugResponse,  thre_abundance = 0.9, thre_STC = 0.2544, TGI = True):
-    if TGI:
+def assignFlowType(DrugResponse,  thre_abundance = 0.9, thre_STC = 0.2544, Vol_Ratio = True):
+    if Vol_Ratio:
         if  DrugResponse['STC'] >= 0.2544:
             return 'Acquired resistance'
         elif DrugResponse['AAC'] >= 0.9:
@@ -751,7 +759,7 @@ class scConGraph:
 
         
         
-    def preProcess(self, regress_out = ['nCount_RNA', 'percent_mito', 'percent_ribo'], npcs=40, process_comb = True, harmony = False):
+    def preProcess(self, regress_out = ['nCount_RNA', 'percent_mito', 'percent_ribo'], npcs=40, n_top_genes_single = 2000, n_top_genes_comb=3000, process_comb = True, harmony = False):
         '''
         Preprocess the single-cell RNA-seq data contained within the scConGraph object. This method applies a series
         of preprocessing steps including the selection of highly variable genes, regression out of unwanted sources
@@ -760,7 +768,7 @@ class scConGraph:
         Parameters
         ----------
         regress_out : list of str, optional
-            A list of variables to regress out of the analysis, typically technical factors that are not of primary
+            A list of variables (in adata.obs) to regress out of the analysis, typically technical factors that are not of primary
             biological interest. Common examples include the total counts per cell (nCount_RNA), the percentage of
             mitochondrial gene expression (percent_mito), and the percentage of ribosomal gene expression (percent_ribo). 
             Default is ['nCount_RNA', 'percent_mito', 'percent_ribo'].
@@ -770,12 +778,12 @@ class scConGraph:
 
         '''
         print('Preprocess control sample')
-        self.data_ctrl = runScanpyProcess(self.data_ctrl, n_top_genes = 2000, regress_out_variables = regress_out )
+        self.data_ctrl = runScanpyProcess(self.data_ctrl, n_top_genes = n_top_genes_single, regress_out_variables = regress_out )
         print('Preprocess treated sample')
-        self.data_treat = runScanpyProcess(self.data_treat, n_top_genes = 2000, regress_out_variables = regress_out)
+        self.data_treat = runScanpyProcess(self.data_treat, n_top_genes = n_top_genes_single, regress_out_variables = regress_out)
         if process_comb:
             print('Preprocess combined sample')
-            self.data_comb= runScanpyProcess(self.data_comb, n_top_genes = 3000, regress_out_variables = regress_out, harmony = False)
+            self.data_comb= runScanpyProcess(self.data_comb, n_top_genes = n_top_genes_comb, regress_out_variables = regress_out, harmony = harmony, condition = self.key)
 
 
 
@@ -874,11 +882,11 @@ class scConGraph:
         sim_Ctrl_Treat = getSimilarity(PC_data_comb_ctrl, PC_data_comb_treat, k=k, alpha=alpha[0])
 
         np.savetxt(resultPath + runLabel + '_Comb_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Ctrl_Treat)
-        np.savetxt(resultPath + runLabel + '_Ctrl_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Ctrl)
-        np.savetxt(resultPath + runLabel + '_Treat_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Treat)
+        # np.savetxt(resultPath + runLabel + '_Ctrl_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Ctrl)
+        # np.savetxt(resultPath + runLabel + '_Treat_similarity_alpha' + str(alpha[0]) + '_raw.txt', sim_Treat)
 
         rows, cols = np.where(sim_Ctrl_Treat != 0)
-        #edge_weight_comb = [(f'C{i}', f'T{j}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)]
+        # edge_weight_comb = [(f'C{i}', f'T{j}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)]
         edge_weight_comb = [(f'C{i}', f'T{j}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)] + [(f'T{j}', f'C{i}', sim_Ctrl_Treat[i, j]) for i, j in zip(rows, cols)] 
 
         rows, cols = np.where(np.triu(sim_Ctrl, k=1) != 0)
@@ -911,7 +919,7 @@ class scConGraph:
 
     
 
-    def runEmbedding(self, path, size_1ord=100, size_2ord=100, negative=5, samples=500, alpha=20):
+    def runEmbedding(self, path, size_1ord=100, size_2ord=100, negative=5, samples=500, alpha=20, threads = 20):
         '''
         Run the LINE (Large-scale Information Network Embedding) algorithm to generate embeddings for both the 
         first-order and second-order proximities for control and treated samples.
@@ -945,15 +953,15 @@ class scConGraph:
         time_start = time.time()
         edges = resultPath + runLabel + '_Ctrl_edge_weight_alpha' + str(alpha) + '_raw.txt'
         output = resultPath + runLabel + '_Ctrl_1st_embeddings.txt'
-        runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples)
+        runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples, threads = threads)
 
         edges = resultPath + runLabel + '_Treat_edge_weight_alpha' + str(alpha) + '_raw.txt'
         output = resultPath + runLabel + '_Treat_1st_embeddings.txt'
-        runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples)
+        runLINE(path, edges=edges, output=output, order=1, size=size_1ord, negative=negative, samples=samples, threads = threads)
 
         edges = resultPath + runLabel + '_Comb_edge_weight_alpha' + str(alpha) + '_raw.txt'
         output = resultPath + runLabel + '_2nd_embeddings.txt'
-        runLINE(path, edges=edges, output=output, order=2, size=size_2ord, negative=negative, samples=samples)
+        runLINE(path, edges=edges, output=output, order=2, size=size_2ord, negative=negative, samples=samples, threads = threads)
 
         time_end = time.time()
         print('time cost', time_end - time_start, 's')
@@ -1070,7 +1078,7 @@ class scConGraph:
         origin_TPM_raw = cls2cls_prob(self.data_treat, self.data_ctrl, sparse_weight_mat_transpose, thre_cell = threshold_cell, thre_cls=0)
         origin_TPM_raw = np.transpose(origin_TPM_raw)
         
-        tmp = rapid_QC(transition_TPM, origin_TPM)
+        tmp = rapid_QC(transition_TPM, origin_TPM, threshold = threshold_cls*2)
         transition_TPM = tmp[0]
         origin_TPM = tmp[1]
 #         print(origin_TPM)
@@ -1195,16 +1203,9 @@ class scConGraph:
         Parameters
         ----------
         score_type : str, optional
-            The type of clustering evaluation metric to use. Supported options include 'silhouette_score' for
-            and 'davies_bouldin_score' for evaluating the compactness and separation of clusters. The default 
-            is 'silhouette_score'.
-
-        Notes
-        -----
-        - The silhouette score ranges from -1 to +1, where a high value indicates that clusters are well-separated
-        and densely packed. A low or negative silhouette score suggests overlapping clusters.
-        - The Davies-Bouldin index is ideally low, with values close to zero indicating better clustering by minimizing
-        within-cluster distances and maximizing between-cluster distances.
+            The type of clustering evaluation metric to use. Supported options include 'silhouette_score', 
+            'calinski_harabasz_score' and 'davies_bouldin_score' for evaluating the compactness and separation of clusters. 
+            The default is 'silhouette_score'.
 
         Returns
         -------
@@ -1219,7 +1220,6 @@ class scConGraph:
 
         plt.show()
         return score_df1, score_df2
-
 
 
 
@@ -1502,9 +1502,9 @@ class scConGraph:
                         
                         
                         
-    def sankey_TGI(self, DrugResponseInfo, TGI):
+    def sankey_overall(self, DrugResponseInfo, Vol_Ratio):
         '''
-        Generate a Sankey diagram that incorporates the Tumor Growth Inhibition (TGI) index to visualize the
+        Generate a Sankey diagram that incorporates the Volume Ratio index to visualize the
         flow of cellular transitions between clusters, adjusting for absolute abundance changes. This visualization 
         highlights how treatment affects cell population dynamics, taking into account the reduction in tumor volume 
         or cell count.
@@ -1515,8 +1515,8 @@ class scConGraph:
             A DataFrame containing detailed information on changes in cell abundances and cell states between control and 
             treated clusters. Derived from the `DrugResponse` step. 
 
-        TGI : float
-            The Tumor Growth Inhibition index, a measure used to quantify the effectiveness of a treatment in inhibiting
+        Vol_Ratio : float
+            The Volume ratio index, a measure used to quantify the effectiveness of a treatment in inhibiting
             tumor growth. This value adjusts the flow volumes in the Sankey diagram to reflect the reduced cell counts
             or tumor volumes post-treatment.
 
@@ -1528,7 +1528,7 @@ class scConGraph:
             quantitative and qualitative analysis.
         '''
                 
-        frac = 1-TGI
+        frac = Vol_Ratio
         transition_TPM = self.transition_TPM
         origin_TPM = self.origin_TPM
         
@@ -1628,3 +1628,97 @@ class scConGraph:
                         ax.fill_between(xs[pi:(pi + 2)], ys_dw[pi:(pi + 2)], ys_up[pi:(pi + 2)], alpha=0.7,
                                         color=grad_colors[pi], edgecolor=None)
 
+
+
+
+    def plot_degree_distributions(
+        self,
+        object_type = 'Ctrl',
+        alpha_list=None,
+        k_list=None,
+        threshold=1e-40,
+        bins=100,
+        figsize=(15, 13),
+        save_plot=False,
+        save_path="degree_distributions.png"
+    ):
+        """
+        绘制不同 alpha (alpha_list) 和 k (k_list) 值下的度分布直方图。
+
+        参数：
+        --------
+        data : np.ndarray
+            用于计算相似度矩阵的输入数据 (e.g. principal components)。
+        alpha_list : list, optional
+            要测试的 alpha 值。默认 [5, 10, 20, 30, 50]
+        k_list : list, optional
+            要测试的 k 值。默认 [2, 3, 5, 10]
+        threshold : float, optional
+            判断是否有边的阈值，默认 1e-40
+        bins : int, optional
+            绘图直方图的 bins 数量，默认 100
+        figsize : tuple, optional
+            整体图像的大小，默认 (15, 13)
+        save_plot : bool, optional
+            是否保存生成的图像。默认 False（不保存）。
+        save_path : str, optional
+            当 save_plot=True 时，保存图像的文件路径或文件名。默认 "degree_distributions.png"
+
+        返回值：
+        --------
+        fig, axes : (matplotlib.figure.Figure, np.ndarray)
+            返回创建的 Figure 和子图 axes 数组，便于后续操作或保存。
+        """
+        if object_type == 'Ctrl':
+            data_use = self.data_ctrl.obsm['X_pca'].copy()
+        elif object_type == 'Treat':
+            data_use = self.data_treat.obsm['X_pca'].copy()
+        elif object_type =='Comb':
+            data_use = self.data_comb.obsm['X_pca'].copy()
+
+        if alpha_list is None:
+            alpha_list = [5, 10, 20, 30, 50]
+        if k_list is None:
+            k_list = [2, 3, 5, 10]
+
+        # 创建子图
+        fig, axes = plt.subplots(len(alpha_list), len(k_list), figsize=figsize, sharex=True, sharey=True)
+
+        # 如果只有一个 alpha 或一个 k 的情况，需要保证 axes 可正确索引
+        if len(alpha_list) == 1 and len(k_list) == 1:
+            # 只有一个子图
+            axes = np.array([[axes]])
+        elif len(alpha_list) == 1:
+            # 只有一行
+            axes = np.array([axes])
+        elif len(k_list) == 1:
+            # 只有一列
+            axes = axes[:, np.newaxis]
+        
+        for i, alpha in enumerate(alpha_list):
+            for j, k in enumerate(k_list):
+                # 计算相似度矩阵
+                
+                affinity_mat = getSimilarity(data_use, data_use, k, alpha)
+
+                # 计算每个细胞(行)对应的度（大于 threshold 即视为有边）
+                degree_arr = np.sum(affinity_mat > threshold, axis=1)
+                median_degree = int(np.median(degree_arr))
+
+                # 绘制直方图
+                ax = axes[i, j]
+                ax.hist(degree_arr, bins=bins, color='blue', alpha=0.7)
+                ax.set(
+                    title=f'α={alpha}, k={k}, Median={median_degree}',
+                    xlabel='Degree',
+                    ylabel='Frequency'
+                )
+                ax.grid(True)
+
+        plt.tight_layout()
+
+        # 如果用户希望保存图像，则执行保存
+        if save_plot:
+            fig.savefig(save_path, dpi=300)  # 可以根据需求调整 dpi
+        
+        plt.show()
