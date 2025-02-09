@@ -19,19 +19,26 @@ Total RAM (GB): 251.38
 ```
 
 ## Installation
-scConGraph requires `python` version 3.7+.  Install directly via pip:
-``` Python
-pip install scConGraph
+To ensure a clean and isolated environment for `scConGraph`, we recommend creating a new **Conda environment**:
+``` bash
+conda create -n scConGraph_env python=3.9 -y
+conda activate scConGraph_env
 ``` 
-#### Alternative Installation
-If you prefer not to install `scConGraph`， you can download the script directly from the GitHub repository: [scConGraph/scConGraph.py](https://github.com/Li-Xinqi/scConGraph/blob/main/scConGraph/scConGraph.py). Then, manually import the module in your Python environment:
-```Python
-import sys
-sys.path.append('./scConGraph-main/scConGraph/')
-import scConGraph as scg
+You can install `scConGraph` directly from PyPI:
+``` bash
+pip install --index-url https://pypi.org/simple/ scConGraph==1.0.0
 ```
-#### Required Dependencies
-**Importantly**, the LINE toolkit (LINUX version) must be downloaded and installed from LINE GitHub Repository (https://github.com/tangjianpku/LINE.git) **before using scConGraph**. 
+(Optional) We recommend using `scConGraph` in Jupyter Notebook. To do so, install `ipykernel` and add the environment to Jupyter:
+``` bash
+pip install ipykernel
+python -m ipykernel install --user --name=scConGraph_env --display-name "scConGraph_env"
+```
+Now, you can select "scConGraph_env" as the kernel when running Jupyter Notebook. 
+
+### Required Dependencies
+Importantly, **the LINE toolkit** (LINUX version) must be downloaded and installed from LINE GitHub Repository (https://github.com/tangjianpku/LINE.git) **before using scConGraph**. 
+
+
 
 ## **Tutorial**
 The vignette of `scConGraph` can be found in the project [Wiki](https://github.com/Li-Xinqi/scConGraph/wiki).

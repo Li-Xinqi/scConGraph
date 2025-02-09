@@ -7,7 +7,7 @@ import seaborn as sns
 from scipy.spatial import distance
 from scipy import sparse
 import random
-import community
+# import community
 import time
 import scanpy as sc
 from sklearn.preprocessing import normalize
@@ -759,7 +759,7 @@ class scConGraph:
 
         
         
-    def preProcess(self, regress_out = ['nCount_RNA', 'percent_mito', 'percent_ribo'], npcs=40, n_top_genes_single = 2000, n_top_genes_comb=3000, process_comb = True, harmony = False):
+    def preProcess(self, regress_out = None, npcs=40, n_top_genes_single = 2000, n_top_genes_comb=3000, process_comb = True, harmony = False):
         '''
         Preprocess the single-cell RNA-seq data contained within the scConGraph object. This method applies a series
         of preprocessing steps including the selection of highly variable genes, regression out of unwanted sources
@@ -767,11 +767,11 @@ class scConGraph:
 
         Parameters
         ----------
-        regress_out : list of str, optional
-            A list of variables (in adata.obs) to regress out of the analysis, typically technical factors that are not of primary
-            biological interest. Common examples include the total counts per cell (nCount_RNA), the percentage of
-            mitochondrial gene expression (percent_mito), and the percentage of ribosomal gene expression (percent_ribo). 
-            Default is ['nCount_RNA', 'percent_mito', 'percent_ribo'].
+        regress_out : list of str or None, optional
+        A list of variables (in adata.obs) to regress out of the analysis, typically technical factors that are not of primary
+        biological interest. Common examples include the total counts per cell (nCount_RNA), the percentage of
+        mitochondrial gene expression (percent_mito), and the percentage of ribosomal gene expression (percent_ribo).
+        If None, it defaults to ['nCount_RNA', 'percent_mito', 'percent_ribo']. Default is None.
         npcs : int, optional
             The number of principal components to retain in the PCA step. This parameter controls the dimensionality
             reduction aspect of the preprocessing. Default is 40.
